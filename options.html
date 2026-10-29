@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>DC Ops Jira Assistant – Settings</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="form">
+    <h1>DC Ops Jira Assistant – Settings</h1>
+
+    <h2>AI provider</h2>
+
+    <div class="field">
+      <label for="provider">Provider</label>
+      <select id="provider"></select>
+    </div>
+
+    <div class="provider-box" data-provider="anthropic">
+      <div class="field">
+        <label for="anthropicKey">Anthropic API key</label>
+        <input id="anthropicKey" type="password" placeholder="sk-ant-…" autocomplete="off">
+        <div class="hint">Get one at console.anthropic.com.</div>
+      </div>
+    </div>
+
+    <div class="provider-box" data-provider="openai">
+      <div class="field">
+        <label for="openaiKey">OpenAI API key</label>
+        <input id="openaiKey" type="password" placeholder="sk-…" autocomplete="off">
+        <div class="hint">Get one at platform.openai.com.</div>
+      </div>
+    </div>
+
+    <div class="provider-box" data-provider="gemini">
+      <div class="field">
+        <label for="geminiKey">Gemini API key</label>
+        <input id="geminiKey" type="password" placeholder="AIza…" autocomplete="off">
+        <div class="hint">Get one at aistudio.google.com.</div>
+      </div>
+    </div>
+
+    <div class="provider-box" data-provider="local">
+      <div class="field">
+        <label for="localBaseUrl">Local server URL (OpenAI-compatible)</label>
+        <div class="row">
+          <input id="localBaseUrl" type="text" placeholder="http://localhost:1234/v1">
+          <button type="button" data-preset="lmstudio">LM Studio</button>
+          <button type="button" data-preset="ollama">Ollama</button>
+        </div>
+        <div class="hint">
+          LM Studio: start the server in the Developer tab (default port 1234).<br>
+          Ollama: run <code>ollama serve</code>. If you get a 403, set <code>OLLAMA_ORIGINS=chrome-extension://*</code> and restart Ollama.<br>
+          Use a model that's good at following JSON instructions (e.g. 7B+ instruct models).
+        </div>
+      </div>
+      <div class="field">
+        <label for="localApiKey">API key (optional)</label>
+        <input id="localApiKey" type="password" placeholder="Leave empty unless your server requires one" autocomplete="off">
+      </div>
+    </div>
+
+    <div class="field">
+      <label for="model">Model</label>
+      <div class="row">
+        <select id="model"><option value="">Auto</option></select>
+        <button id="loadModels" type="button">Load models</button>
+      </div>
+      <div class="hint">Click “Load models” to test the connection and pick a model. “Auto” picks one for you.</div>
+    </div>
+
+    <h2>Ping, reachability &amp; BMC</h2>
+
+    <div class="field">
+      <label>Ping helper (one-time install)</label>
+      <div class="hint" style="margin-bottom:6px">Browsers can't ping, so a small helper on this computer does it. Open <b>Terminal</b> and paste:</div>
+      <div class="row">
+        <input id="installCmd" type="text" readonly class="mono">
+        <button id="copyInstall" type="button">Copy</button>
+      </div>
+      <div class="hint">If you moved the <code>jira-assistant</code> folder off your Desktop, adjust the path. Requires python3 (macOS: <code>xcode-select --install</code>).</div>
+      <div class="row" style="margin-top:8px">
+        <button id="testHelper" type="button">Test ping helper</button>
+        <span id="helperMsg" class="muted" style="align-self:center"></span>
+      </div>
+    </div>
+
+    <div class="field">
+      <label><input id="pingAuto" type="checkbox"> Ping the server's IP addresses automatically when a ticket is analyzed</label>
+    </div>
+
+    <h2>Jira</h2>
+
+    <div class="field">
+      <label><input id="autoRun" type="checkbox"> Analyze automatically when I open a Jira issue</label>
+      <div class="hint">If off, click “Analyze” in the side panel.</div>
+    </div>
+
+    <div class="field">
+      <label for="jiraHosts">Self-hosted Jira hostnames (optional)</label>
+      <input id="jiraHosts" type="text" placeholder="jira.mycompany.com, jira2.mycompany.com">
+      <div class="hint">*.atlassian.net works out of the box. Chrome will ask permission for any host you add.</div>
+    </div>
+
+    <div class="field">
+      <label for="serverField">Server name field (optional)</label>
+      <input id="serverField" type="text" placeholder="e.g. Hostname or customfield_10234">
+      <div class="hint">If your tickets have a dedicated field, its value is used exactly. Otherwise the AI finds it in the text.</div>
+    </div>
+
+    <div class="field">
+      <label for="locationField">Location field (optional)</label>
+      <input id="locationField" type="text" placeholder="e.g. Datacenter or customfield_10301">
+    </div>
+
+    <div class="field">
+      <label for="bmcUrl">BMC web address</label>
+      <input id="bmcUrl" type="text" class="mono" placeholder="https://{ip}">
+      <div class="hint">Used by the <b>Open BMC</b> button. <code>{ip}</code> is replaced with the BMC IP. Change it if your BMCs use http or a port, e.g. <code>http://{ip}:8080</code>.</div>
+    </div>
+
+    <h2>NetBox &amp; Podcrawler</h2>
+
+    <div class="field">
+      <label><input id="netboxEnabled" type="checkbox"> Look up the server in NetBox</label>
+      <div class="hint">Shows NetBox status, location, serial, BMC IP and cabling, and warns when the ticket and NetBox disagree.</div>
+    </div>
+
+    <div class="field">
+      <label for="netboxUrl">NetBox address</label>
+      <input id="netboxUrl" type="text" class="mono" placeholder="https://netbox.prod.lambdalabs.cloud">
+    </div>
+
+    <div class="field">
+      <label for="netboxToken">NetBox API token (optional)</label>
+      <input id="netboxToken" type="password" autocomplete="off" placeholder="Leave empty to use your NetBox browser login">
+      <div class="hint">By default the extension uses your NetBox login in Chrome, so no token is needed. If that doesn't work, create a read-only token in NetBox (your profile → API Tokens) and paste it here.</div>
+      <div class="row" style="margin-top:8px">
+        <button id="testNetbox" type="button">Test NetBox</button>
+        <span id="netboxMsg" class="muted" style="align-self:center"></span>
+      </div>
+    </div>
+
+    <div class="field">
+      <label for="podcrawlerUrl">Podcrawler address</label>
+      <input id="podcrawlerUrl" type="text" class="mono" placeholder="https://podcrawler.aws.lambdalabs.cloud/#/racking">
+      <div class="hint">The <b>Open Podcrawler</b> button opens this and copies the hostname, so you can paste it into the search.</div>
+    </div>
+
+    <div class="field">
+      <label><input id="podcrawlerStep" type="checkbox"> Add a “Rescan in Podcrawler” step to replacement tickets</label>
+    </div>
+
+    <h2>AI instructions</h2>
+
+    <div class="field">
+      <label for="teamContext">Team context / runbook notes (optional)</label>
+      <textarea id="teamContext" placeholder="e.g. Hostname format is <site>-<rack>-<node>. For GPU Xid 79, drain the node and reseat the GPU before RMA. Escalate PSU failures to DC Ops."></textarea>
+      <div class="hint">Added to every prompt so suggestions follow your team's procedures.</div>
+    </div>
+
+    <div class="field">
+      <label for="customInstructions">Custom instructions (optional)</label>
+      <textarea id="customInstructions" placeholder="e.g. Always answer in English. Keep next steps to 5 items max. Mention the RMA number if there is one. Flag tickets older than 7 days."></textarea>
+      <div class="hint">Added to every prompt and take priority over the built-in behaviour. The power-down safety check always stays on: “OK to power down” still requires evidence in the ticket.</div>
+    </div>
+
+    <div class="row">
+      <button id="save" class="primary" type="button">Save</button>
+      <span id="msg" class="muted" style="align-self:center"></span>
+    </div>
+  </div>
+
+  <script src="common.js"></script>
+  <script src="analysis.js"></script>
+  <script src="ping.js"></script>
+  <script src="netbox.js"></script>
+  <script src="options.js"></script>
+</body>
+</html>

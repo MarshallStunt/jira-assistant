@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>DC Ops Assistant</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="bar">
+    <div>
+      <div class="title">DC Ops Assistant</div>
+      <div id="issueKey" class="muted">No issue</div>
+    </div>
+    <div class="actions">
+      <button id="analyzeBtn" class="primary" disabled>Analyze</button>
+      <button id="settingsBtn" title="Settings">⚙</button>
+    </div>
+  </header>
+
+  <div id="status" class="status hidden"></div>
+
+  <main id="result" class="hidden"></main>
+
+  <div id="footer" class="footer hidden">
+    <button id="copyBtn">Copy as Jira comment</button>
+    <span id="meta" class="muted"></span>
+  </div>
+
+  <section id="chat" class="chat hidden">
+    <div class="chat-head">
+      <span class="label">Ask the AI about this ticket</span>
+      <button id="chatClear" class="mini hidden" type="button">Clear</button>
+    </div>
+    <div id="chatLog" class="chat-log"></div>
+    <div id="chatSuggest" class="chips"></div>
+    <form id="chatForm" class="chat-bar">
+      <textarea id="chatInput" rows="1" placeholder="Ask about this ticket…" title="Enter to send, Shift+Enter for a new line"></textarea>
+      <button id="chatSend" class="primary" type="submit" title="Send">➤</button>
+    </form>
+  </section>
+
+  <script src="common.js"></script>
+  <script src="analysis.js"></script>
+  <script src="ping.js"></script>
+  <script src="netbox.js"></script>
+  <script src="render.js"></script>
+  <script src="sidepanel.js"></script>
+  <script src="chat.js"></script>
+</body>
+</html>
