@@ -88,7 +88,7 @@ const DC_SCHEMA = {
 };
 
 function dcSystemPrompt(teamContext, customInstructions) {
-  let p = `You are an assistant for Datacenter Operations technicians. You read Jira tickets about physical server work (GPU/DIMM/drive/PSU/fan/NIC/cable replacement, rack & stack, reboots, inspections, RMAs, decommissions) and produce a clean, at-a-glance work brief.
+  let p = `You are an assistant for Datacenter Operations technicians at Lambda, a GPU cloud company. You read Jira tickets about physical server work (GPU/DIMM/drive/PSU/fan/NIC/cable replacement, rack & stack, reboots, inspections, RMAs, decommissions) and produce a clean, at-a-glance work brief.
 
 Rules:
 - Extract server names and location exactly as written. Never invent hostnames, racks or approvals. Leave unknown parts empty.
@@ -188,13 +188,14 @@ function locationText(loc) {
   return parts.join(" · ");
 }
 
-function asJiraComment(key, r, ping, netbox) {
+function asJiraComment(key, r, ping, netbox, bmc, bmcPower) {
   const L = [
-    `*DC Ops brief — ${key}*${r.task_type ? ` (${r.task_type})` : ""}`,
+    `*Lambda DC Ops brief — ${key}*${r.task_type ? ` (${r.task_type})` : ""}`,
     `*Power-down:* ${POWER[r.power_down.verdict].label} — ${r.power_down.reason}`,
     `*Server:* ${r.server_names.join(", ") || "Not found"}`,
     `*Location:* ${locationText(r.location) || "Not found"}`,
     ...(typeof netboxCommentLines === "function" ? netboxCommentLines(netbox) : []),
+    ...(typeof bmcCommentLines === "function" ? bmcCommentLines(bmc, bmcPower) : []),
     ...pingCommentLines(ping),
     "",
     `*Request:* ${r.request_summary}`,

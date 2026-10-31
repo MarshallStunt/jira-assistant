@@ -2,14 +2,45 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>DC Ops Jira Assistant – Settings</title>
+  <title>Lambda DC Ops Assistant – Settings</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
   <div class="form">
-    <h1>DC Ops Jira Assistant – Settings</h1>
+    <h1 class="brand"><img src="icons/logo.svg" alt="" width="32" height="32"><span><span class="brand-name">Lambda</span> DC Ops Assistant <span class="brand-sub">Settings</span></span></h1>
+    <nav id="tabs" class="tabs" role="tablist" aria-label="Settings sections"></nav>
 
-    <h2>AI provider</h2>
+    <section class="guide" data-tab="start">
+      <h2 class="guide-title">Getting started (5 minutes)</h2>
+      <ol class="guide-steps">
+        <li>
+          <b>Get an AI API key.</b> The assistant needs a key for one AI service. We recommend <b>Anthropic Claude</b>: fast and accurate for tickets. OpenAI or Google Gemini also work.
+          <details>
+            <summary>I don't have a key: ask IT</summary>
+            <p>Send this to IT (Slack or a ticket). You can change the provider if your team uses a different one.</p>
+            <textarea id="itRequest" class="mono" rows="7" readonly></textarea>
+            <div class="row"><button id="copyItRequest" type="button">Copy request</button></div>
+            <p class="hint">Treat the key like a password: paste it only into this page, never into Slack, Jira or email.</p>
+          </details>
+        </li>
+        <li>
+          <b>Install the helper tools</b> (ping, BMC).
+          <span class="os-mac">Open <b>Terminal</b> (press <kbd>⌘ Space</kbd>, type <i>Terminal</i>, press <kbd>Return</kbd>), paste this command with <kbd>⌘ V</kbd> and press <kbd>Return</kbd>.</span>
+          <span class="os-win">Open <b>PowerShell</b> (press the <kbd>Windows</kbd> key, type <i>PowerShell</i>, press <kbd>Enter</kbd>), paste this command with <kbd>Ctrl V</kbd> (or right-click) and press <kbd>Enter</kbd>.</span>
+          It asks before installing anything.
+          <div class="row" style="margin-top:6px">
+            <input id="setupCmd" type="text" readonly class="mono">
+            <button id="copySetup" type="button">Copy</button>
+          </div>
+          <div class="hint">If you put the <code>jira-assistant</code> folder somewhere other than your Desktop, change the path in the command.</div>
+        </li>
+        <li>
+          <b>Paste your key below</b>, click <b>Load models</b>, then <b>Save</b>. Open any Jira ticket and click the Lambda icon in Chrome's toolbar.
+        </li>
+      </ol>
+    </section>
+
+    <h2 data-tab="start">AI provider</h2>
 
     <div class="field">
       <label for="provider">Provider</label>
@@ -66,10 +97,32 @@
         <select id="model"><option value="">Auto</option></select>
         <button id="loadModels" type="button">Load models</button>
       </div>
-      <div class="hint">Click “Load models” to test the connection and pick a model. “Auto” picks one for you.</div>
+      <div class="hint">Click “Load models” to test the connection and pick a model. “Auto” picks a fast, accurate one: the newest <b>Claude Sonnet</b>, a <b>GPT mini</b>, or <b>Gemini Flash</b>.</div>
     </div>
 
-    <h2>Ping, reachability &amp; BMC</h2>
+    <div class="field">
+      <label for="speed">Response speed</label>
+      <select id="speed">
+        <option value="fast">Fast — answers in seconds (recommended)</option>
+        <option value="balanced">Balanced — thinks a bit more</option>
+        <option value="thorough">Thorough — slowest, for tricky tickets</option>
+      </select>
+      <div class="hint">How long the AI may think before answering. Fast is accurate for almost all tickets; the power-down check always stays strict.</div>
+    </div>
+
+    <h2 data-tab="privacy">Privacy</h2>
+
+    <div class="field">
+      <label><input id="privacyMode" type="checkbox"> <b>Privacy mode:</b> hide sensitive data from the AI</label>
+      <div class="hint">Before a ticket is sent, the values below are replaced with placeholders like <code>[IP-1]</code> or <code>[PERSON-2]</code>. The AI works with the placeholders, and the real values are put back into the brief on this computer, so you still see them. Passwords, tokens and API keys found in tickets are always removed in privacy mode. Not needed with a Local model: nothing leaves your computer.</div>
+      <div id="privacyKinds" class="privacy-kinds"></div>
+    </div>
+    <div class="field">
+      <label for="privacyWords">Other words to hide (optional)</label>
+      <textarea id="privacyWords" rows="3" placeholder="One per line, e.g. customer names or project code names"></textarea>
+    </div>
+
+    <h2 data-tab="servers">Ping helper &amp; reachability</h2>
 
     <div class="field">
       <label>Ping helper (one-time install)</label>
@@ -78,7 +131,9 @@
         <input id="installCmd" type="text" readonly class="mono">
         <button id="copyInstall" type="button">Copy</button>
       </div>
-      <div class="hint">If you moved the <code>jira-assistant</code> folder off your Desktop, adjust the path. Requires python3 (macOS: <code>xcode-select --install</code>).</div>
+      <div class="hint">If you moved the <code>jira-assistant</code> folder off your Desktop, adjust the path.
+        <span class="os-mac">Requires python3 (<code>xcode-select --install</code>). Run it in Terminal.</span>
+        <span class="os-win">Requires Python 3 (<code>winget install Python.Python.3.13</code>). Run it in PowerShell.</span></div>
       <div class="row" style="margin-top:8px">
         <button id="testHelper" type="button">Test ping helper</button>
         <span id="helperMsg" class="muted" style="align-self:center"></span>
@@ -89,7 +144,7 @@
       <label><input id="pingAuto" type="checkbox"> Ping the server's IP addresses automatically when a ticket is analyzed</label>
     </div>
 
-    <h2>Jira</h2>
+    <h2 data-tab="jira">Jira</h2>
 
     <div class="field">
       <label><input id="autoRun" type="checkbox"> Analyze automatically when I open a Jira issue</label>
@@ -113,13 +168,60 @@
       <input id="locationField" type="text" placeholder="e.g. Datacenter or customfield_10301">
     </div>
 
+
+    <h2 data-tab="servers">BMC logins, health &amp; power</h2>
+
+    <div class="field">
+      <label for="bmcLogin">BMC password for Check health</label>
+      <select id="bmcLogin">
+        <option value="paste">I paste it (copied from 1Password)</option>
+        <option value="1password">Automatic from 1Password CLI</option>
+      </select>
+      <div class="hint">With <b>I paste it</b>, Check health asks for the password: copy the BMC IP (there's a button), find it in 1Password (<kbd class="k-quick"></kbd>), copy the password and paste it into the panel. The check starts as soon as you paste. The password is kept in memory until you close the panel, never saved or sent to the AI.</div>
+    </div>
+    <div class="field">
+      <label for="bmcUser">BMC username</label>
+      <input id="bmcUser" type="text" class="mono" placeholder="ADMIN">
+    </div>
+
     <div class="field">
       <label for="bmcUrl">BMC web address</label>
       <input id="bmcUrl" type="text" class="mono" placeholder="https://{ip}">
       <div class="hint">Used by the <b>Open BMC</b> button. <code>{ip}</code> is replaced with the BMC IP. Change it if your BMCs use http or a port, e.g. <code>http://{ip}:8080</code>.</div>
     </div>
 
-    <h2>NetBox &amp; Podcrawler</h2>
+    <div id="opBox">
+    <div class="hint" style="margin-bottom:10px">The ping helper finds the BMC's login in 1Password, copies the password (cleared after 30 s) and uses it to read health over Redfish. Passwords never reach the extension or the AI. Needs the 1Password CLI (<code>brew install 1password-cli</code>) with 1Password → Settings → Developer → <b>Integrate with 1Password CLI</b> turned on.<br>
+    Items are matched by website = BMC IP, then the BMC IP, hostname or serial in the item title.</div>
+
+    <div class="field">
+      <label for="opVault">Vault (optional)</label>
+      <input id="opVault" type="text" placeholder="All vaults">
+    </div>
+    <div class="field">
+      <label for="opTag">Only items with this tag (optional)</label>
+      <input id="opTag" type="text" placeholder="e.g. bmc">
+    </div>
+    <div class="field">
+      <label for="opFallbackItem">Fallback item (optional)</label>
+      <input id="opFallbackItem" type="text" placeholder="e.g. Default BMC login">
+      <div class="hint">Title or ID of the item to use when nothing matches, e.g. a shared default BMC login.</div>
+    </div>
+    <div class="field">
+      <label for="opAccount">1Password account (optional)</label>
+      <input id="opAccount" type="text" placeholder="e.g. lambdal.1password.com">
+      <div class="hint">Only needed if you're signed in to more than one account.</div>
+    </div>
+    <div class="field">
+      <label><input id="bmcHealthAuto" type="checkbox"> Read BMC health automatically when a ticket opens (may show a 1Password prompt)</label>
+      <div class="row" style="margin-top:8px">
+        <button id="testOp" type="button">Test 1Password</button>
+        <span id="opMsg" class="muted" style="align-self:center"></span>
+      </div>
+    </div>
+    </div>
+
+    <h2 data-tab="servers">NetBox &amp; Podcrawler</h2>
 
     <div class="field">
       <label><input id="netboxEnabled" type="checkbox"> Look up the server in NetBox</label>
@@ -151,7 +253,7 @@
       <label><input id="podcrawlerStep" type="checkbox"> Add a “Rescan in Podcrawler” step to replacement tickets</label>
     </div>
 
-    <h2>AI instructions</h2>
+    <h2 data-tab="jira">AI instructions</h2>
 
     <div class="field">
       <label for="teamContext">Team context / runbook notes (optional)</label>
@@ -165,16 +267,19 @@
       <div class="hint">Added to every prompt and take priority over the built-in behaviour. The power-down safety check always stays on: “OK to power down” still requires evidence in the ticket.</div>
     </div>
 
-    <div class="row">
+    <div class="row save-bar">
       <button id="save" class="primary" type="button">Save</button>
       <span id="msg" class="muted" style="align-self:center"></span>
     </div>
   </div>
 
+  <script src="icons.js"></script>
   <script src="common.js"></script>
   <script src="analysis.js"></script>
   <script src="ping.js"></script>
   <script src="netbox.js"></script>
+  <script src="privacy.js"></script>
+  <script src="bmc.js"></script>
   <script src="options.js"></script>
 </body>
 </html>

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "DC Ops Jira Assistant",
-  "version": "1.4.0",
-  "description": "Datacenter Ops brief for Jira issues: server, location, power-down safety, work history and next steps — using Claude, OpenAI, Gemini or a local model.",
+  "name": "Lambda DC Ops Assistant",
+  "version": "1.7.2",
+  "description": "Lambda Datacenter Ops brief for Jira issues: server, location, power-down safety, work history and next steps — using Claude, OpenAI, Gemini or a local model.",
   "permissions": [
     "sidePanel",
     "storage",
@@ -33,7 +33,7 @@
   },
   "options_page": "options.html",
   "action": {
-    "default_title": "DC Ops Jira Assistant",
+    "default_title": "Lambda DC Ops Assistant",
     "default_icon": {
       "16": "icons/icon16.png",
       "32": "icons/icon32.png",

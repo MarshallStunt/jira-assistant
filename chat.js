@@ -10,8 +10,8 @@ const MAX_TURNS = 20; // keep the last N messages as context
 
 const chat = { key: null, history: [], busy: false, getContext: null };
 
-function chatSystemPrompt(settings, key, issueText, brief, netbox) {
-  let p = `You are an assistant for Datacenter Operations technicians. The technician is working on Jira ticket ${key} and asks follow-up questions about it.
+function chatSystemPrompt(settings, key, issueText, brief, netbox, bmc) {
+  let p = `You are an assistant for Datacenter Operations technicians at Lambda, a GPU cloud company. The technician is working on Jira ticket ${key} and asks follow-up questions about it.
 
 Answer concisely and practically, like a senior DC technician would: short sentences, short lists, concrete commands or steps when useful. Use plain text (no markdown tables or headings). If something isn't in the ticket, say so instead of guessing. Never say it is OK to power down a server unless the ticket explicitly allows it. If asked to draft a message or comment, write it ready to paste.`;
   if (settings.teamContext?.trim()) p += `\n\nTeam procedures and conventions:\n${settings.teamContext.trim()}`;
@@ -19,6 +19,8 @@ Answer concisely and practically, like a senior DC technician would: short sente
   p += `\n\n=== Ticket ${key} ===\n${String(issueText || "(ticket text unavailable)").slice(0, 60000)}`;
   if (brief) p += `\n\n=== Brief already shown to the technician ===\n${JSON.stringify(brief)}`;
   if (netbox?.ok) p += `\n\n=== NetBox record(s) for this server (source of truth for location, IPs, cabling) ===\n${JSON.stringify(netbox.devices).slice(0, 20000)}`;
+  const health = Object.values(bmc || {}).filter((x) => x?.ok).map(({ ip, system, manager, problems, events, at }) => ({ ip, system, manager, problems, events, readAt: new Date(at).toISOString() }));
+  if (health.length) p += `\n\n=== Live BMC health read over Redfish (actual power state, failed parts, event log) ===\n${JSON.stringify(health).slice(0, 15000)}`;
   return p;
 }
 
@@ -89,14 +91,15 @@ async function askAI(question) {
     const settings = await getSettings();
     const problem = missingConfig(settings);
     if (problem) throw new Error(problem);
-    const { issueText, brief, netbox } = await chat.getContext();
-    const messages = chat.history.filter((m) => !m.error).slice(-MAX_TURNS).map(({ role, content }) => ({ role, content }));
+    const { issueText, brief, netbox, bmc, people } = await chat.getContext();
+    const privacy = makeRedactor(settings, people); // same placeholders for the ticket and the questions
+    const messages = chat.history.filter((m) => !m.error).slice(-MAX_TURNS).map(({ role, content }) => ({ role, content: privacy.redact(content) }));
     const { text } = await generateText(settings, {
-      system: chatSystemPrompt(settings, key, issueText, brief, netbox),
+      system: privacy.redact(chatSystemPrompt(settings, key, issueText, brief, netbox, bmc)),
       messages
     });
     if (chat.key !== key) return; // user switched tickets meanwhile
-    chat.history.push({ role: "assistant", content: tidyAnswer(text) });
+    chat.history.push({ role: "assistant", content: tidyAnswer(privacy.restore(text)) });
   } catch (e) {
     if (chat.key !== key) return;
     chat.history.push({ role: "assistant", content: String(e.message || e), error: true });

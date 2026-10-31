@@ -16,13 +16,19 @@ fi
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Find a working python3 (Chrome starts the helper with a minimal PATH, so we store the absolute path).
+# Prefer one with a modern TLS library (TLS 1.3): Apple's built-in Python uses an old LibreSSL that many
+# BMCs refuse ("EOF occurred in violation of protocol"). Homebrew's Python is checked first.
 PY=""
-for cand in "$(command -v python3 2>/dev/null || true)" /opt/homebrew/bin/python3 /usr/local/bin/python3 /usr/bin/python3; do
-  if [ -n "$cand" ] && [ -x "$cand" ] && "$cand" -c 'import sys; assert sys.version_info >= (3, 6)' >/dev/null 2>&1; then
-    PY="$("$cand" -c 'import sys; print(sys.executable)')"
-    break
-  fi
+FALLBACK=""
+for cand in $(ls -r /opt/homebrew/bin/python3.[0-9]* /usr/local/bin/python3.[0-9]* 2>/dev/null | grep -E 'python3\.[0-9]+$') \
+            /opt/homebrew/bin/python3 /usr/local/bin/python3 "$(command -v python3 2>/dev/null || true)" /usr/bin/python3; do
+  [ -n "$cand" ] && [ -x "$cand" ] || continue
+  "$cand" -c 'import sys; assert sys.version_info >= (3, 6)' >/dev/null 2>&1 || continue
+  exe="$("$cand" -c 'import sys; print(sys.executable)')"
+  if "$cand" -c 'import ssl; assert ssl.HAS_TLSv1_3' >/dev/null 2>&1; then PY="$exe"; break; fi
+  [ -z "$FALLBACK" ] && FALLBACK="$exe"
 done
+[ -z "$PY" ] && PY="$FALLBACK"
 if [ -z "$PY" ]; then
   echo "✗ python3 not found."
   echo "  On macOS run:  xcode-select --install   (then run this installer again)"

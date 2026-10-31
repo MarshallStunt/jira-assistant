@@ -133,25 +133,79 @@ function issueMeta(data) {
   return {
     status: simplify(f.status),
     priority: simplify(f.priority),
-    assignee: simplify(f.assignee) || "Unassigned"
+    assignee: simplify(f.assignee) || "Unassigned",
+    reporter: simplify(f.reporter)
   };
 }
 
 // ---------- AI ----------
 
-async function analyzeIssue(settings, key, issueText) {
+// onPartial(brief, raw) fires while the answer streams in, so the panel can fill in as the AI writes.
+// privacy: makeRedactor() result — the ticket is sent with placeholders and real values are put back here.
+async function analyzeIssue(settings, key, issueText, onPartial, privacy) {
   const { result, model } = await generateStructured(settings, {
     system: dcSystemPrompt(settings.teamContext, settings.customInstructions),
-    user: `Today is ${new Date().toISOString().slice(0, 10)}.\n\nJira issue ${key}:\n\n${issueText}`,
+    user: `Today is ${new Date().toISOString().slice(0, 10)}.\n\nJira issue ${key}:\n\n${privacy.redact(issueText)}`,
     schema: DC_SCHEMA,
-    schemaName: "dc_ops_brief"
+    schemaName: "dc_ops_brief",
+    onPartial: onPartial && ((raw) => onPartial(normalizeDc(privacy.restore(raw)), raw))
   });
-  let brief = normalizeDc(result);
+  let brief = normalizeDc(privacy.restore(result));
   if (settings.podcrawlerStep) brief = ensurePodcrawlerStep(brief);
   return { brief, model: `${providerLabel(settings.provider)} · ${model}` };
 }
 
 // ---------- UI ----------
+
+// ---------- Progress line ----------
+// One line under the header for everything that runs when a ticket opens, instead of a spinner per card.
+const STEP_LABELS = { ticket: "Ticket", ai: "AI brief", netbox: "NetBox", ping: "Ping" };
+let steps = {};
+let stepsHide;
+
+function setStep(name, state, note = "") {
+  steps[name] = { state, note };
+  renderSteps();
+}
+
+function resetSteps() {
+  steps = {};
+  renderSteps();
+}
+
+function renderSteps() {
+  const el = $("progress");
+  const names = Object.keys(STEP_LABELS).filter((n) => steps[n]);
+  el.replaceChildren(...names.map((n) => {
+    const { state, note } = steps[n];
+    return h("span", { class: `step ${state}` },
+      state === "run" ? h("span", { class: "spinner" }) : icon(state === "ok" ? "check" : "x", 11),
+      STEP_LABELS[n], note && h("span", { class: "step-note" }, note));
+  }));
+  const busy = names.some((n) => steps[n].state === "run");
+  clearTimeout(stepsHide);
+  el.classList.toggle("hidden", !names.length);
+  // Fade out a moment after everything is done (failures stay visible).
+  if (names.length && !busy && names.every((n) => steps[n].state === "ok")) stepsHide = setTimeout(() => el.classList.add("hidden"), 2500);
+}
+
+// ---------- Jump links ----------
+const JUMPS = [["✅ Steps", () => $("steps")], ["🔧 BMC", () => $("bmcBox")], ["🕘 History", () => $("history")], ["🗄️ NetBox", () => $("netboxBox")]];
+
+function updateJump() {
+  const nav = $("jump");
+  const visible = !$("result").classList.contains("hidden");
+  const items = JUMPS.filter(([, el]) => visible && el() && !el().classList.contains("hidden"));
+  nav.classList.toggle("hidden", items.length < 2);
+  nav.replaceChildren(...items.map(([label, el]) => h("button", { class: "jump-link", onclick: () => {
+    const target = el();
+    if (target.tagName === "DETAILS") target.open = true;
+    target.scrollIntoView({ behavior: "smooth", block: "start" });
+  } }, label)));
+}
+let jumpFrame;
+new MutationObserver(() => { cancelAnimationFrame(jumpFrame); jumpFrame = requestAnimationFrame(updateJump); })
+  .observe($("result"), { childList: true, subtree: true, attributes: true, attributeFilter: ["class"] });
 
 function setStatus(msg, kind = "") {
   const el = $("status");
@@ -168,6 +222,24 @@ function hideResult() {
   if (typeof closeChat === "function") closeChat();
 }
 
+// Short message at the bottom of the panel.
+let toastTimer;
+function toast(msg, ms = 6000) {
+  let el = document.getElementById("toast");
+  if (!el) document.body.appendChild(el = h("div", { id: "toast", class: "toast", role: "status" }));
+  el.replaceChildren(...[msg].flat());
+  el.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove("show"), ms);
+}
+
+// Clicking a person opens the Slack app with their name on the clipboard: press ⌘K / Ctrl+K and paste.
+async function openSlack(name) {
+  await navigator.clipboard.writeText(name).catch(() => {});
+  h("a", { href: "slack://open" }).click();
+  toast(["Name copied. In Slack press ", h("kbd", {}, KEYS.slackSearch), " and paste to open the chat with ", h("b", {}, name), "."]);
+}
+
 async function openBmc(ip) {
   const { bmcUrl: template } = await getSettings();
   chrome.tabs.create({ url: bmcUrl(template, ip) });
@@ -179,7 +251,8 @@ async function chatContext(key, entry) {
     const issue = await fetchIssue(current.tabId, key);
     entry.issueText = issue.data ? issueToText(issue.data) : issue.pageText || "";
   }
-  return { issueText: entry.issueText, brief: entry.brief, netbox: lastResult?.key === key ? lastResult.netbox : null };
+  const mine = lastResult?.key === key;
+  return { issueText: entry.issueText, brief: entry.brief, netbox: mine ? lastResult.netbox : null, bmc: mine ? lastResult.bmc : null, people: entry.people || [] };
 }
 
 async function show(key, entry) {
@@ -192,10 +265,10 @@ async function show(key, entry) {
     meta: entry.meta,
     checks,
     onCheck: () => chrome.storage.session.set({ [checksKey]: [...checks] }),
-    openBmc
+    openSlack
   });
   startLookups(key, entry);
-  $("meta").textContent = `${entry.model} · ${new Date(entry.analyzedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+  $("meta").textContent = `${entry.model} · ${new Date(entry.analyzedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}${entry.tookS ? ` · ${entry.tookS} s` : ""}${entry.hidden != null ? ` · 🔒 ${entry.hidden} hidden from AI` : ""} · v${chrome.runtime.getManifest().version}`;
   $("result").classList.remove("hidden");
   $("footer").classList.remove("hidden");
   $("analyzeBtn").textContent = "Re-analyze";
@@ -236,20 +309,123 @@ async function startLookups(key, entry, force = false) {
     if (nb && Date.now() - nb.at > NETBOX_MAX_AGE_MS) nb = null;
     if (!nb) {
       renderNetbox(box(), { loading: true }, actions);
+      setStep("netbox", "run");
       const { issueText } = await chatContext(key, entry);
       nb = await netboxLookup(settings, entry.brief, issueText);
       nb.at = nb.at || Date.now();
       if (nb.ok || nb.notFound) await chrome.storage.session.set({ [cacheKey]: nb });
+      if (current.key === key) setStep("netbox", nb.ok ? "ok" : "err", nb.ok ? "" : nb.notFound || nb.empty ? "not found" : "failed");
     }
     if (run !== lookupRun || current.key !== key) return;
     if (lastResult?.key === key) lastResult.netbox = nb;
     renderNetbox(box(), { nb }, actions);
   }
   if (run !== lookupRun || current.key !== key) return;
+  setupBmc(key, entry, nb);
   setupPing(key, entry.brief, entry.ticketIps || [], netboxPingTargets(nb));
 }
 
+// ---------- BMC (1Password login + Redfish health) ----------
+
+// The BMC card of the ticket on screen, so ping results can update it when they arrive.
+let bmcView = null;
+
+// Ping result per IP (from the Reachability check) → the BMC card warns when its BMC doesn't answer.
+function pingByIp(ping) {
+  return Object.fromEntries((ping?.results || []).map((x) => [x.address, x]));
+}
+
+async function setupBmc(key, entry, nb) {
+  const settings = await getSettings();
+  const who = bmcTargets(entry.brief, nb, findSerialsInText(entry.issueText || ""));
+  const cacheKey = `bmc:${key}`;
+  const state = {
+    who, copy: {}, showLogin: {}, creds: {}, power: {}, mode: settings.bmcLogin, user: settings.bmcUser || "ADMIN",
+    verdict: entry.brief.power_down, reach: pingByIp(lastResult?.key === key ? lastResult.ping : null),
+    health: (await chrome.storage.session.get(cacheKey))[cacheKey] || {}
+  };
+  const box = () => (current.key === key ? document.getElementById("bmcBox") : null);
+  const draw = () => renderBmc(box(), state, actions);
+  const saveHealth = async () => {
+    const ok = Object.fromEntries(Object.entries(state.health).filter(([, x]) => x?.ok));
+    await chrome.storage.session.set({ [cacheKey]: ok });
+    if (lastResult?.key === key) lastResult.bmc = ok;
+  };
+  const readHealth = async (ip) => {
+    state.health[ip] = "loading";
+    draw();
+    const x = await readBmcHealth(settings, ip, who, state.creds[ip]);
+    state.health[ip] = x;
+    if (x.ok) state.showLogin[ip] = false;
+    else if (/1password/i.test(x.error || "")) state.showLogin[ip] = true;
+    else if (/rejected the login/i.test(x.error || "") && state.creds[ip]) { delete state.creds[ip]; state.showLogin[ip] = true; }
+    await saveHealth();
+    draw();
+  };
+  const actions = {
+    openBmc,
+    onSetup: () => chrome.runtime.openOptionsPage(),
+    onCopy: async (ip) => {
+      state.copy[ip] = "loading";
+      draw();
+      const resp = await copyBmcPassword(settings, ip, who);
+      state.copy[ip] = resp;
+      if (!resp.ok && /1password/i.test(resp.error || "")) state.showLogin[ip] = true; // offer the pasted login
+      draw();
+      // The helper clears the clipboard; drop the "copied" note at the same time.
+      if (resp.ok) setTimeout(() => { if (state.copy[ip] === resp) { delete state.copy[ip]; draw(); } }, resp.clears_in * 1000);
+    },
+    onShowLogin: (ip) => {
+      state.showLogin[ip] = true;
+      draw();
+    },
+    onHealth: (ip, login) => {
+      if (login) state.creds[ip] = login; // memory only, for "↻ Health" and power actions
+      // Paste mode without a password yet: ask for it (the clipboard is left alone, it may hold the password).
+      if (state.mode !== "1password" && !state.creds[ip]) {
+        state.showLogin[ip] = true;
+        draw();
+        return;
+      }
+      readHealth(ip);
+    },
+    onPowerOpen: (ip, open) => {
+      state.power[ip] = { open };
+      draw();
+    },
+    onPower: async (ip, resetType, confirm) => {
+      if (state.mode !== "1password" && !state.creds[ip]) {
+        state.power[ip] = { result: { ok: false, error: "Paste the BMC password first (click ↻ Health)." } };
+        state.showLogin[ip] = true;
+        return draw();
+      }
+      state.power[ip] = { busy: true };
+      draw();
+      const label = { GracefulShutdown: "Shutdown", ForceOff: "Force off", On: "Power on" }[resetType];
+      const resp = await bmcPower(settings, ip, who, state.creds[ip], resetType, confirm);
+      state.power[ip] = { result: { ...resp, label } };
+      if (resp.ok && lastResult?.key === key) {
+        lastResult.bmcPower = [...(lastResult.bmcPower || []), { ip, label, at: resp.at, before: resp.before }];
+      }
+      draw();
+      // Read the power state again once the server had time to react.
+      if (resp.ok) setTimeout(() => current.key === key && readHealth(ip), resetType === "GracefulShutdown" ? 20000 : 8000);
+    }
+  };
+  bmcView = { key, state, draw };
+  if (lastResult?.key === key) lastResult.bmc = state.health;
+  draw();
+  const first = who.ips[0];
+  if (settings.bmcHealthAuto && state.mode === "1password" && first && !state.health[first]) actions.onHealth(first);
+}
+
 // ---------- Reachability ----------
+
+function updateBmcReach(key, ping) {
+  if (!ping?.ok || bmcView?.key !== key) return;
+  bmcView.state.reach = pingByIp(ping);
+  bmcView.draw();
+}
 
 const PING_MAX_AGE_MS = 60 * 1000; // re-ping automatically if older than this
 let pingRun = 0;
@@ -269,13 +445,20 @@ async function setupPing(key, brief, ticketIps, extraTargets = []) {
   async function doPing() {
     const run = ++pingRun;
     renderPing(box(), { loading: true, targets }, actions);
+    setStep("ping", "run");
     const resp = await runPing(targets);
+    if (current.key === key) {
+      const up = (resp.results || []).filter((x) => x.reachable).length;
+      setStep("ping", resp.ok ? (up === resp.results.length ? "ok" : "err") : "err", resp.ok ? `${up}/${resp.results.length} up` : "");
+    }
     if (resp.ok) await chrome.storage.session.set({ [cacheKey]: resp });
     if (run === pingRun && lastResult?.key === key) lastResult.ping = resp.ok ? resp : null;
     if (run === pingRun) renderPing(box(), { targets, resp }, actions);
+    updateBmcReach(key, resp);
   }
 
   if (lastResult?.key === key) lastResult.ping = cached || null;
+  updateBmcReach(key, cached);
   const sameTargets = cached?.results && targets.map((t) => t.address).sort().join() === cached.results.map((x) => x.address).sort().join();
   const fresh = cached && sameTargets && Date.now() - cached.at < PING_MAX_AGE_MS;
   if (fresh || !settings.pingAuto) renderPing(box(), { targets, resp: cached }, actions);
@@ -303,7 +486,9 @@ async function analyze(force = false) {
   $("analyzeBtn").disabled = true;
   hideResult();
   try {
-    setStatus(`Reading ${key}, comments and history…`, "loading");
+    setStatus("");
+    resetSteps();
+    setStep("ticket", "run");
     const issue = await fetchIssue(current.tabId, key);
     let text;
     const mapped = {};
@@ -317,13 +502,31 @@ async function analyze(force = false) {
       throw new Error(issue.error);
     }
 
-    setStatus(`Asking ${providerLabel(settings.provider)} to brief ${key}…`, "loading");
-    const { brief, model } = await analyzeIssue(settings, key, text);
+    const people = issuePeople(issue.data);
+    const privacy = makeRedactor(settings, people);
+    const started = Date.now();
+    setStep("ticket", "ok");
+    setStep("ai", "run", providerLabel(settings.provider).replace(/ \(.*\)/, ""));
+    const tick = setInterval(() => current.key === key && setStep("ai", "run", `${Math.round((Date.now() - started) / 1000)} s`), 1000);
+    let brief, model;
+    // Show the brief as it is written. The power verdict stays "checking" until the AI has moved past it.
+    const onPartial = (partial, raw) => {
+      if (current.key !== key) return;
+      renderBrief($("result"), partial, { key, meta: issueMeta(issue.data), partial: true, powerPending: !("request_summary" in raw), openSlack });
+      $("result").classList.remove("hidden");
+    };
+    try {
+      ({ brief, model } = await analyzeIssue(settings, key, text, onPartial, privacy));
+    } finally {
+      clearInterval(tick);
+    }
+    setStep("ai", "ok", `${Math.round((Date.now() - started) / 1000)} s`);
     // Exact field mappings (if configured) win over the model's extraction.
     if (mapped.server) brief.server_names = mapped.server.split(/\s*,\s*/).filter(Boolean);
     if (mapped.location && !locationText(brief.location)) brief.location.site = mapped.location;
 
-    const entry = { brief, model, meta: issueMeta(issue.data), ticketIps: findIPsInText(text), issueText: text, analyzedAt: Date.now() };
+    const entry = { brief, model, meta: issueMeta(issue.data), ticketIps: findIPsInText(text), issueText: text, analyzedAt: Date.now(), tookS: Math.round((Date.now() - started) / 1000),
+      people, hidden: privacy.on ? privacy.hidden : null };
     await chrome.storage.session.set({ [cacheKey]: entry });
     if (force) await chrome.storage.session.remove(`checks:${key}`);
     if (current.key === key) {
@@ -331,6 +534,8 @@ async function analyze(force = false) {
       await show(key, entry);
     }
   } catch (e) {
+    if (current.key === key) hideResult(); // don't leave a half-written brief on screen
+    for (const n of ["ticket", "ai"]) if (steps[n]?.state === "run") setStep(n, "err");
     setStatus(String(e.message || e), "error");
   } finally {
     current.running = false;
@@ -346,6 +551,8 @@ async function refresh() {
   if (key === current.key && tab?.id === current.tabId) return;
   current.tabId = tab?.id ?? null;
   current.key = key;
+  current.origin = tab?.url ? new URL(tab.url).origin : "";
+  resetSteps();
 
   $("issueKey").textContent = key || "Open a Jira issue";
   $("analyzeBtn").disabled = !key;
@@ -372,13 +579,17 @@ chrome.tabs.onUpdated.addListener((tabId, info) => {
 });
 chrome.windows.onFocusChanged.addListener(scheduleRefresh);
 
+$("settingsBtn").replaceChildren(icon("settings", 16));
+$("chatSend").replaceChildren(icon("send", 15));
+$("copyBtn").prepend(icon("copy", 13), " ");
+
 $("analyzeBtn").addEventListener("click", () => analyze(true));
 $("settingsBtn").addEventListener("click", () => chrome.runtime.openOptionsPage());
 $("copyBtn").addEventListener("click", async () => {
   if (!lastResult) return;
-  await navigator.clipboard.writeText(asJiraComment(lastResult.key, lastResult.brief, lastResult.ping, lastResult.netbox));
-  $("copyBtn").textContent = "Copied ✓";
-  setTimeout(() => ($("copyBtn").textContent = "Copy as Jira comment"), 1500);
+  await navigator.clipboard.writeText(asJiraComment(lastResult.key, lastResult.brief, lastResult.ping, lastResult.netbox, lastResult.bmc, lastResult.bmcPower));
+  $("copyBtn").replaceChildren(icon("check", 13), " Copied");
+  setTimeout(() => $("copyBtn").replaceChildren(icon("copy", 13), " Copy as Jira comment"), 1500);
 });
 
 refresh();

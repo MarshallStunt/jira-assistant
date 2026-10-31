@@ -2,22 +2,27 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>DC Ops Assistant</title>
+  <title>Lambda DC Ops Assistant</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
   <header class="bar">
-    <div>
-      <div class="title">DC Ops Assistant</div>
-      <div id="issueKey" class="muted">No issue</div>
+    <div class="brand">
+      <img src="icons/logo.svg" alt="" width="28" height="28">
+      <div>
+        <div class="title"><span class="brand-name">Lambda</span> DC Ops Assistant</div>
+        <div id="issueKey" class="muted">No issue</div>
+      </div>
     </div>
     <div class="actions">
       <button id="analyzeBtn" class="primary" disabled>Analyze</button>
-      <button id="settingsBtn" title="Settings">⚙</button>
+      <button id="settingsBtn" class="icon-btn" title="Settings" aria-label="Settings"></button>
     </div>
+    <div id="progress" class="progress hidden" aria-live="polite"></div>
+    <nav id="jump" class="jump hidden" aria-label="Jump to section"></nav>
   </header>
 
-  <div id="status" class="status hidden"></div>
+  <div id="status" class="status hidden" role="alert"></div>
 
   <main id="result" class="hidden"></main>
 
@@ -35,14 +40,17 @@
     <div id="chatSuggest" class="chips"></div>
     <form id="chatForm" class="chat-bar">
       <textarea id="chatInput" rows="1" placeholder="Ask about this ticket…" title="Enter to send, Shift+Enter for a new line"></textarea>
-      <button id="chatSend" class="primary" type="submit" title="Send">➤</button>
+      <button id="chatSend" class="primary" type="submit" title="Send" aria-label="Send"></button>
     </form>
   </section>
 
+  <script src="icons.js"></script>
   <script src="common.js"></script>
   <script src="analysis.js"></script>
   <script src="ping.js"></script>
   <script src="netbox.js"></script>
+  <script src="privacy.js"></script>
+  <script src="bmc.js"></script>
   <script src="render.js"></script>
   <script src="sidepanel.js"></script>
   <script src="chat.js"></script>

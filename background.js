@@ -40,6 +40,8 @@ function enablePanel() {
 chrome.runtime.onInstalled.addListener((details) => {
   enablePanel();
   if (details.reason === "install") chrome.runtime.openOptionsPage();
+  // Slack direct-message lookup was removed in 1.7.2: forget its saved token, address and member list.
+  chrome.storage.local.remove(["slackToken", "slackUrl", "slackDir"]);
 });
 
 chrome.runtime.onStartup.addListener(enablePanel);

@@ -21,6 +21,10 @@ const DEFAULTS = {
   localApiKey: "",
   models: {},          // { anthropic: "...", openai: "...", gemini: "...", local: "..." }
   jiraHosts: [],       // extra self-hosted Jira hostnames, e.g. ["jira.example.com"]
+  speed: "fast",       // fast | balanced | thorough: how long the model may think before answering
+  privacyMode: false,  // swap sensitive values for placeholders before sending anything to the AI
+  privacyHide: { people: true, contact: true, network: true, serials: true },
+  privacyWords: "",    // extra words to hide (customer names, project codes), one per line
   autoRun: true,       // analyze automatically when a Jira issue opens
   serverField: "",     // optional Jira field name/id holding the server name
   locationField: "",   // optional Jira field name/id holding the location
@@ -28,6 +32,13 @@ const DEFAULTS = {
   customInstructions: "", // extra free-form instructions added to every prompt
   pingAuto: true,      // ping the server's IP addresses automatically when a brief is shown
   bmcUrl: "https://{ip}", // how to open a BMC web UI; {ip} is replaced
+  opVault: "",         // 1Password vault holding BMC logins (blank = all vaults)
+  opAccount: "",       // 1Password account, only needed if you're signed in to several
+  opTag: "",           // only consider items with this tag, e.g. "bmc"
+  opFallbackItem: "",  // item to use when no item matches the BMC IP / hostname / serial
+  bmcLogin: "paste",   // BMC password for Check health: "paste" (user pastes it) or "1password" (CLI)
+  bmcUser: "ADMIN",
+  bmcHealthAuto: false, // read BMC health automatically (1Password CLI mode; may show a 1Password prompt)
   netboxEnabled: true,
   netboxUrl: "https://netbox.prod.lambdalabs.cloud",
   netboxToken: "",     // optional; by default your NetBox browser login is used
@@ -37,7 +48,7 @@ const DEFAULTS = {
 
 async function getSettings() {
   const stored = await chrome.storage.local.get([...Object.keys(DEFAULTS), "apiKey", "model"]);
-  const s = { ...DEFAULTS, ...stored, models: { ...(stored.models || {}) } };
+  const s = { ...DEFAULTS, ...stored, models: { ...(stored.models || {}) }, privacyHide: { ...DEFAULTS.privacyHide, ...(stored.privacyHide || {}) } };
   // Migrate settings from v1 (Anthropic only).
   if (!s.anthropicKey && stored.apiKey) s.anthropicKey = stored.apiKey;
   if (!s.models.anthropic && stored.model) s.models.anthropic = stored.model;
@@ -51,13 +62,20 @@ function providerLabel(id) {
 // Returns a human-readable problem if the provider isn't configured, else "".
 function missingConfig(s) {
   switch (s.provider) {
-    case "anthropic": return s.anthropicKey ? "" : "Add your Anthropic API key in Settings (⚙).";
-    case "openai":    return s.openaiKey ? "" : "Add your OpenAI API key in Settings (⚙).";
-    case "gemini":    return s.geminiKey ? "" : "Add your Gemini API key in Settings (⚙).";
+    case "anthropic": return s.anthropicKey ? "" : "Add your Anthropic API key in Settings (⚙). No key yet? Settings → Getting started shows how to get one from IT.";
+    case "openai":    return s.openaiKey ? "" : "Add your OpenAI API key in Settings (⚙). No key yet? Settings → Getting started shows how to get one from IT.";
+    case "gemini":    return s.geminiKey ? "" : "Add your Gemini API key in Settings (⚙). No key yet? Settings → Getting started shows how to get one from IT.";
     case "local":     return s.localBaseUrl ? "" : "Set your local server URL in Settings (⚙).";
     default:          return "Choose an AI provider in Settings (⚙).";
   }
 }
+
+// Keyboard shortcuts as shown in hints (Mac vs Windows/Linux).
+const IS_MAC = /mac/i.test(navigator.userAgentData?.platform || navigator.platform || "");
+const IS_WIN = /win/i.test(navigator.userAgentData?.platform || navigator.platform || "");
+const KEYS = IS_MAC
+  ? { paste: "⌘V", quickAccess: "⌘⇧Space", slackSearch: "⌘K" }
+  : { paste: "Ctrl+V", quickAccess: "Ctrl+Shift+Space", slackSearch: "Ctrl+K" };
 
 // ---------- HTTP helpers ----------
 
@@ -98,6 +116,118 @@ function openaiHeaders(key) {
 
 function trimSlash(u) {
   return (u || "").trim().replace(/\/+$/, "");
+}
+
+// Try request bodies in order and return the first one the API accepts. Newer options (effort, structured
+// outputs, thinking settings) are rejected with a 400 by older models, so each attempt drops some of them.
+async function postFirstAccepted(url, headers, bodies) {
+  let lastErr;
+  for (const body of bodies) {
+    try {
+      return await httpJson(url, { method: "POST", headers, body: JSON.stringify(body) });
+    } catch (e) {
+      lastErr = e;
+      if (e.status !== 400) break;
+    }
+  }
+  throw lastErr;
+}
+
+// Streaming version: POST each body until one is accepted, then call onEvent(json) for every
+// server-sent event. Lets the panel show the brief while the AI is still writing it.
+async function streamFirstAccepted(url, headers, bodies, onEvent) {
+  let lastErr;
+  for (const body of bodies) {
+    let res;
+    try {
+      res = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
+    } catch (e) {
+      throw new Error(`Could not reach ${new URL(url).origin} (${e.message}). Is the server running?`);
+    }
+    if (!res.ok) {
+      lastErr = new Error(`${new URL(url).host} ${res.status}: ${(await res.text()).slice(0, 600)}`);
+      lastErr.status = res.status;
+      if (res.status !== 400) break;
+      continue;
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const lines = buf.split(/\r?\n/);
+      buf = lines.pop();
+      for (const line of lines) {
+        const data = line.startsWith("data:") ? line.slice(5).trim() : "";
+        if (!data || data === "[DONE]") continue;
+        let ev;
+        try { ev = JSON.parse(data); } catch { continue; }
+        onEvent(ev);
+      }
+    }
+    return;
+  }
+  throw lastErr;
+}
+
+// Best-effort parse of a JSON object that is still being streamed: closes open strings, arrays and
+// objects, dropping a half-written key/value at the end. Returns null if nothing usable yet.
+function parsePartialJson(text) {
+  const t = String(text || "");
+  let s = t.slice(Math.max(0, t.indexOf("{")));
+  if (!s.startsWith("{")) return null;
+  for (let tries = 0; tries < 8 && s; tries++) {
+    const closers = [];
+    let inStr = false, esc = false, cut = 1;
+    for (let i = 0; i < s.length; i++) {
+      const c = s[i];
+      if (inStr) {
+        if (esc) esc = false;
+        else if (c === "\\") esc = true;
+        else if (c === '"') inStr = false;
+        continue;
+      }
+      if (c === '"') inStr = true;
+      else if (c === "{" || c === "[") { closers.push(c === "{" ? "}" : "]"); cut = i + 1; }
+      else if (c === "}" || c === "]") closers.pop();
+      else if (c === ",") cut = i;
+    }
+    const body = (inStr && !esc ? s + '"' : s).replace(/[\s,:]+$/, "");
+    try {
+      return JSON.parse(body + closers.reverse().join(""));
+    } catch {
+      s = s.slice(0, cut); // drop the incomplete tail and try again
+    }
+  }
+  return null;
+}
+
+// Calls onPartial at most every 150 ms with the latest partial object.
+function partialFeeder(onPartial) {
+  let acc = "", last = 0;
+  return {
+    add(text) {
+      acc += text;
+      const now = Date.now();
+      if (onPartial && now - last > 150) {
+        last = now;
+        const obj = parsePartialJson(acc);
+        if (obj) onPartial(obj);
+      }
+    },
+    get text() { return acc; }
+  };
+}
+
+// "speed" setting → each provider's thinking knob. Less thinking = much faster; the brief is mostly extraction.
+const EFFORT = { fast: "low", balanced: "medium", thorough: "high" };
+const effortOf = (s) => EFFORT[s.speed] || "low";
+
+function geminiThinking(model, s) {
+  if (/gemini-2\.5/i.test(model)) return { thinkingBudget: { fast: /pro/i.test(model) ? 128 : 0, balanced: 1024, thorough: -1 }[s.speed] ?? 0 };
+  return { thinkingLevel: effortOf(s) === "high" ? "high" : "low" };
 }
 
 // Pull a JSON object out of model text (handles ```json fences and <think> blocks).
@@ -153,8 +283,9 @@ async function resolveModel(s) {
       ? "No models found on your local server. Load/pull a model first."
       : "No models available for this API key.");
   }
-  const prefer = { anthropic: /sonnet/i, openai: /^gpt/i, gemini: /flash(?!.*lite)/i, local: /./ }[s.provider];
-  const pick = models.find((m) => prefer.test(m.id)) || models[0];
+  // Fast and accurate enough for a brief: newest Sonnet, a GPT "mini", Gemini Flash.
+  const prefer = { anthropic: [/sonnet/i], openai: [/^gpt-\d[\w.]*-mini$/i, /^gpt/i], gemini: [/flash(?!.*lite)/i], local: [/./] }[s.provider];
+  const pick = prefer.map((re) => models.find((m) => re.test(m.id))).find(Boolean) || models[0];
   const stored = (await chrome.storage.local.get("models")).models || {};
   await chrome.storage.local.set({ models: { ...stored, [s.provider]: pick.id } });
   return pick.id;
@@ -163,38 +294,59 @@ async function resolveModel(s) {
 // ---------- Structured generation ----------
 // schema: JSON Schema (object). Returns { result, model }.
 
-async function generateStructured(s, { system, user, schema, schemaName }) {
+// onPartial(obj) is called with the partly written result while the answer streams in (Claude, OpenAI, local).
+async function generateStructured(s, { system, user, schema, schemaName, onPartial }) {
   const model = await resolveModel(s);
   let result;
   switch (s.provider) {
-    case "anthropic": result = await callAnthropic(s, model, system, user, schema, schemaName); break;
-    case "openai":    result = await callOpenAICompatible("https://api.openai.com/v1", s.openaiKey, model, system, user, schema, schemaName, false); break;
+    case "anthropic": result = await callAnthropic(s, model, system, user, schema, schemaName, onPartial); break;
+    case "openai":    result = await callOpenAICompatible(s, "https://api.openai.com/v1", s.openaiKey, model, system, user, schema, schemaName, false, onPartial); break;
     case "gemini":    result = await callGemini(s, model, system, user, schema); break;
-    case "local":     result = await callOpenAICompatible(trimSlash(s.localBaseUrl), s.localApiKey, model, system, user, schema, schemaName, true); break;
+    case "local":     result = await callOpenAICompatible(s, trimSlash(s.localBaseUrl), s.localApiKey, model, system, user, schema, schemaName, true, onPartial); break;
     default: throw new Error(`Unknown provider: ${s.provider}`);
   }
   return { result, model };
 }
 
-async function callAnthropic(s, model, system, user, schema, name) {
-  const j = await httpJson("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: anthropicHeaders(s.anthropicKey),
-    body: JSON.stringify({
-      model,
-      max_tokens: 4000,
-      system,
-      tools: [{ name, description: "Report the structured analysis.", input_schema: schema }],
-      tool_choice: { type: "tool", name },
-      messages: [{ role: "user", content: user }]
-    })
-  });
-  const block = (j.content || []).find((b) => b.type === "tool_use");
-  if (!block) throw new Error("Claude did not return a structured result.");
-  return block.input;
+// Thinking fully off, where the model allows it: the brief is extraction, so thinking mostly adds wait time.
+// (Claude Opus 5.5 / Fable always think; for them effort "low" is the only lever.)
+function claudeThinkingOff(model) {
+  if (/sonnet-5-5/i.test(model)) return { type: "between_tools" };
+  if (/haiku-5|sonnet-5(?!-5)|opus-5(?!-5)|opus-4-[678]|sonnet-4-6/i.test(model)) return { type: "disabled" };
+  return null;
 }
 
-async function callOpenAICompatible(base, key, model, system, user, schema, name, isLocal) {
+async function callAnthropic(s, model, system, user, schema, name, onPartial) {
+  // The system prompt is the same on every ticket, so cache it.
+  const base = { model, stream: true, system: [{ type: "text", text: system, cache_control: { type: "ephemeral" } }], messages: [{ role: "user", content: user }] };
+  const format = { type: "json_schema", schema: strictify(schema) };
+  const off = s.speed === "fast" || !s.speed ? claudeThinkingOff(model) : null;
+  const bodies = [
+    // Current models: structured output + low effort (+ thinking off). Claude 5.5 models reject forced tool calls.
+    off && { ...base, max_tokens: 16000, thinking: off, output_config: { format, effort: effortOf(s) } },
+    { ...base, max_tokens: 16000, output_config: { format, effort: effortOf(s) } },
+    { ...base, max_tokens: 16000, output_config: { format } },
+    // Older models: force a tool call to get JSON.
+    { ...base, max_tokens: 4000, tools: [{ name, description: "Report the structured analysis.", input_schema: schema }], tool_choice: { type: "tool", name } }
+  ].filter(Boolean);
+  const out = partialFeeder(onPartial);
+  let stop = "";
+  await streamFirstAccepted("https://api.anthropic.com/v1/messages", anthropicHeaders(s.anthropicKey), bodies, (ev) => {
+    if (ev.type === "content_block_delta") {
+      if (ev.delta?.type === "text_delta") out.add(ev.delta.text);
+      else if (ev.delta?.type === "input_json_delta") out.add(ev.delta.partial_json);
+    } else if (ev.type === "message_delta") {
+      stop = ev.delta?.stop_reason || stop;
+    } else if (ev.type === "error") {
+      throw new Error(`Claude: ${ev.error?.message || "stream error"}`);
+    }
+  });
+  if (stop === "refusal") throw new Error("Claude declined to analyze this ticket. Try Re-analyze or another model.");
+  if (!out.text.trim()) throw new Error("Claude did not return a structured result.");
+  return parseJsonLoose(out.text);
+}
+
+async function callOpenAICompatible(s, base, key, model, system, user, schema, name, isLocal, onPartial) {
   const messages = [
     { role: "system", content: `${system}\n\nRespond ONLY with a JSON object matching this schema:\n${JSON.stringify(schema)}` },
     { role: "user", content: user }
@@ -202,6 +354,7 @@ async function callOpenAICompatible(base, key, model, system, user, schema, name
   const body = { model, messages };
   if (isLocal) body.max_tokens = 4000;
   else body.max_completion_tokens = 16000; // reasoning models spend tokens on thinking
+  const effort = !isLocal && /^(o\d|gpt-5)/i.test(model) ? effortOf(s) : null; // reasoning models only
 
   const formats = [
     { type: "json_schema", json_schema: { name, strict: true, schema: strictify(schema) } },
@@ -209,19 +362,23 @@ async function callOpenAICompatible(base, key, model, system, user, schema, name
     null // last resort for local servers without structured-output support
   ];
 
+  const attempts = (isLocal ? formats : formats.slice(0, 1)).flatMap((fmt) => (effort ? [[fmt, effort], [fmt, null]] : [[fmt, null]]));
   let lastErr;
-  for (const fmt of isLocal ? formats : formats.slice(0, 1)) {
-    const payload = { ...body };
+  for (const [fmt, eff] of attempts) {
+    const payload = { ...body, stream: true };
     if (fmt) payload.response_format = fmt;
+    if (eff) payload.reasoning_effort = eff;
     try {
-      const j = await httpJson(`${base}/chat/completions`, {
-        method: "POST",
-        headers: openaiHeaders(key),
-        body: JSON.stringify(payload)
+      const out = partialFeeder(onPartial);
+      let refusal = "";
+      await streamFirstAccepted(`${base}/chat/completions`, openaiHeaders(key), [payload], (ev) => {
+        const d = ev.choices?.[0]?.delta;
+        if (d?.content) out.add(d.content);
+        if (d?.refusal) refusal += d.refusal;
+        if (ev.error) throw new Error(ev.error.message || "stream error");
       });
-      const msg = j.choices?.[0]?.message;
-      if (msg?.refusal) throw new Error(`Model refused: ${msg.refusal}`);
-      return parseJsonLoose(msg?.content);
+      if (refusal) throw new Error(`Model refused: ${refusal}`);
+      return parseJsonLoose(out.text);
     } catch (e) {
       lastErr = e;
       if (!(e.status >= 400 && e.status < 500) || e.status === 401 || e.status === 403) break;
@@ -262,19 +419,15 @@ function toGeminiSchema(schema) {
 
 async function callGemini(s, model, system, user, schema) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
-  const j = await httpJson(url, {
-    method: "POST",
-    headers: { "content-type": "application/json", "x-goog-api-key": s.geminiKey },
-    body: JSON.stringify({
-      systemInstruction: { parts: [{ text: system }] },
-      contents: [{ role: "user", parts: [{ text: user }] }],
-      generationConfig: {
-        responseMimeType: "application/json",
-        responseSchema: toGeminiSchema(schema),
-        maxOutputTokens: 16000
-      }
-    })
-  });
+  const body = {
+    systemInstruction: { parts: [{ text: system }] },
+    contents: [{ role: "user", parts: [{ text: user }] }],
+    generationConfig: { responseMimeType: "application/json", responseSchema: toGeminiSchema(schema), maxOutputTokens: 16000 }
+  };
+  const j = await postFirstAccepted(url, { "content-type": "application/json", "x-goog-api-key": s.geminiKey }, [
+    { ...body, generationConfig: { ...body.generationConfig, thinkingConfig: geminiThinking(model, s) } },
+    body
+  ]);
   const cand = j.candidates?.[0];
   const text = (cand?.content?.parts || []).filter((p) => !p.thought).map((p) => p.text || "").join("");
   if (!text) throw new Error(`Gemini returned no content${cand?.finishReason ? ` (${cand.finishReason})` : ""}.`);
@@ -289,11 +442,11 @@ async function generateText(s, { system, messages, maxTokens = 2000 }) {
   let text = "";
   switch (s.provider) {
     case "anthropic": {
-      const j = await httpJson("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: anthropicHeaders(s.anthropicKey),
-        body: JSON.stringify({ model, max_tokens: maxTokens, system, messages })
-      });
+      const base = { model, system: [{ type: "text", text: system, cache_control: { type: "ephemeral" } }], messages };
+      const j = await postFirstAccepted("https://api.anthropic.com/v1/messages", anthropicHeaders(s.anthropicKey), [
+        { ...base, max_tokens: maxTokens * 4, output_config: { effort: effortOf(s) } }, // room for thinking
+        { ...base, max_tokens: maxTokens }
+      ]);
       text = (j.content || []).filter((b) => b.type === "text").map((b) => b.text).join("");
       break;
     }
@@ -304,25 +457,23 @@ async function generateText(s, { system, messages, maxTokens = 2000 }) {
       const body = { model, messages: [{ role: "system", content: system }, ...messages] };
       if (isLocal) body.max_tokens = maxTokens;
       else body.max_completion_tokens = maxTokens * 4; // reasoning models think first
-      const j = await httpJson(`${base}/chat/completions`, {
-        method: "POST",
-        headers: openaiHeaders(isLocal ? s.localApiKey : s.openaiKey),
-        body: JSON.stringify(body)
-      });
+      const reasoning = !isLocal && /^(o\d|gpt-5)/i.test(model);
+      const j = await postFirstAccepted(`${base}/chat/completions`, openaiHeaders(isLocal ? s.localApiKey : s.openaiKey),
+        reasoning ? [{ ...body, reasoning_effort: effortOf(s) }, body] : [body]);
       text = j.choices?.[0]?.message?.content || "";
       break;
     }
     case "gemini": {
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
-      const j = await httpJson(url, {
-        method: "POST",
-        headers: { "content-type": "application/json", "x-goog-api-key": s.geminiKey },
-        body: JSON.stringify({
-          systemInstruction: { parts: [{ text: system }] },
-          contents: messages.map((m) => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.content }] })),
-          generationConfig: { maxOutputTokens: maxTokens * 4 }
-        })
-      });
+      const body = {
+        systemInstruction: { parts: [{ text: system }] },
+        contents: messages.map((m) => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.content }] })),
+        generationConfig: { maxOutputTokens: maxTokens * 4 }
+      };
+      const j = await postFirstAccepted(url, { "content-type": "application/json", "x-goog-api-key": s.geminiKey }, [
+        { ...body, generationConfig: { ...body.generationConfig, thinkingConfig: geminiThinking(model, s) } },
+        body
+      ]);
       text = (j.candidates?.[0]?.content?.parts || []).filter((p) => !p.thought).map((p) => p.text || "").join("");
       break;
     }
