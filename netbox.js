@@ -1,4 +1,5 @@
-// NetBox lookup: find the ticket's server in NetBox and compare it with the ticket.
+// NetBox: find the ticket's server (location, IPs, cabling, Lambda SKU, journal, modules) and compare it with
+// the ticket, and look up spare parts in storage (inventory plugins).
 // Auth: your NetBox browser login (session cookie) by default, or a personal API token from Settings.
 
 class NetboxAuthError extends Error {}
@@ -89,9 +90,23 @@ function summarizeInterface(i) {
   };
 }
 
+// Journal entries sometimes hold credentials (e.g. "PWD - …" after a motherboard swap): drop those lines
+// everywhere they're shown or sent to the AI.
+function stripSecrets(text) {
+  return String(text || "").split(/\r?\n/)
+    .filter((l) => !/\b(pwd|pw|passw(or)?d|passwd|credentials?|secret|token)\b/i.test(l))
+    .join("\n");
+}
+
 function podcrawlerActivity(journal) {
   const e = (journal || []).find((j) => /podcrawler|podc\b|\bpc scan/i.test(`${j.comments || ""} ${j.created_by?.username || ""} ${j.display || ""}`));
-  return e ? { at: e.created, kind: e.kind?.label || e.kind?.value || "", text: String(e.comments || "").replace(/\s+/g, " ").slice(0, 140) } : null;
+  return e ? { at: e.created, kind: e.kind?.label || e.kind?.value || "", text: stripSecrets(e.comments).replace(/\s+/g, " ").slice(0, 140) } : null;
+}
+
+// The server's work history from its NetBox journal (part swaps, chassis swaps…), credentials removed.
+function journalHistory(journal) {
+  return (journal || []).map((j) => ({ at: j.created, by: j.created_by?.username || "", text: stripSecrets(j.comments).replace(/\s+/g, " ").trim().slice(0, 220) }))
+    .filter((j) => j.text).slice(0, 12);
 }
 
 function netboxMismatches(dev, brief, ticketSerials) {
@@ -127,9 +142,11 @@ async function netboxLookup(settings, brief, issueText) {
       return { ok: false, notFound: true, error: `Not found in NetBox: ${[...names, ...serials].join(", ")}` };
     }
     const detailed = await Promise.all(devices.map(async (d) => {
-      const [ifs, journal] = await Promise.all([
+      const [ifs, journal, mods] = await Promise.all([
         nbGet(settings, `/api/dcim/interfaces/?device_id=${d.id}&limit=250`).catch(() => ({ results: [] })),
-        nbGet(settings, `/api/extras/journal-entries/?assigned_object_type=dcim.device&assigned_object_id=${d.id}&ordering=-created&limit=25`).catch(() => ({ results: [] }))
+        nbGet(settings, `/api/extras/journal-entries/?assigned_object_type=dcim.device&assigned_object_id=${d.id}&ordering=-created&limit=25`).catch(() => ({ results: [] })),
+        // Installed modules (mostly transceivers on switches; server parts aren't recorded in NetBox)
+        nbGet(settings, `/api/dcim/modules/?device_id=${d.id}&limit=250`).catch(() => ({ results: [] }))
       ]);
       const interfaces = (ifs.results || []).map(summarizeInterface).filter((i) => i.peer || i.mgmt || i.mac);
       interfaces.sort((a, b) => Number(b.mgmt) - Number(a.mgmt) || a.name.localeCompare(b.name, undefined, { numeric: true }));
@@ -155,6 +172,12 @@ async function netboxLookup(settings, brief, issueText) {
         oobIp: stripPrefix(d.oob_ip?.address),
         interfaces,
         podcrawler: podcrawlerActivity(journal.results),
+        legacyLpn: d.custom_fields?.legacy_LPN || "", // the server's own Lambda SKU in the parts catalog (e.g. CSN0051)
+        history: journalHistory(journal.results),
+        modules: (mods.results || []).map((m) => ({
+          bay: m.module_bay?.name || "", model: m.module_type?.model || "", partNumber: m.module_type?.part_number || "",
+          vendor: m.module_type?.manufacturer?.name || "", status: m.status?.value || ""
+        })),
         mismatches: netboxMismatches(d, brief, serials)
       };
     }));
@@ -186,4 +209,87 @@ function netboxCommentLines(nb) {
     `*NetBox:* [${d.name}|${d.url}] — ${d.statusLabel || "?"} · ${[d.site, d.rack && `Rack ${d.rack}`, d.position != null && `RU ${d.position}`].filter(Boolean).join(" · ")}${d.serial ? ` · S/N ${d.serial}` : ""}${d.oobIp ? ` · BMC ${d.oobIp}` : ""}`,
     ...d.mismatches.map((m) => `* ⚠ ${m}`)
   ]);
+}
+
+// ---------- Spare parts in storage (NetBox inventory plugins) ----------
+// Consumables = counted stock per storage location (type named by Lambda P/N, e.g. 207-000002).
+// Stored assets = serialized spares (named "<Lambda P/N or SKU>_<serial>"), counted here per location.
+
+const siteCodeOf = (location) => (String(location || "").match(/^[A-Z]{3}\d{2}/i) || [""])[0].toUpperCase();
+
+// terms: identifiers of one part (Lambda P/N, legacy SKU, MPN). Returns { ok, rows: [{ location, site, onsite, receiving, kind, what }] }.
+async function netboxStock(settings, terms, siteCode = "") {
+  const ids = [...new Set(terms.map((t) => String(t || "").trim()).filter((t) => t.length >= 4))].slice(0, 3);
+  if (!ids.length) return { ok: true, rows: [] };
+  try {
+    const rows = new Map();
+    const add = (key, row) => {
+      const r = rows.get(key);
+      if (r) { r.onsite += row.onsite; r.receiving += row.receiving; } else rows.set(key, row);
+    };
+    for (const id of ids) {
+      const q = encodeURIComponent(id);
+      const [cons, assets] = await Promise.all([
+        nbGet(settings, `/api/plugins/inventory-consumables/consumables/?q=${q}&limit=100`).catch(() => ({ results: [] })),
+        nbGet(settings, `/api/plugins/inventory/assets/?status=stored&q=${q}&limit=500`).catch(() => ({ results: [] }))
+      ]);
+      for (const c of cons.results || []) {
+        const loc = c.storage_location?.name || "?";
+        add(`c:${c.id}`, { kind: "stock", location: loc, site: siteCodeOf(loc), onsite: Number(c.onsite_quantity) || 0,
+          receiving: Number(c.receiving_quantity) || 0, what: c.consumable_type?.description || c.consumable_type?.name || "" });
+      }
+      for (const a of assets.results || []) {
+        const loc = a.storage_location?.name || "?";
+        add(`a:${loc}`, { kind: "serialized", location: loc, site: siteCodeOf(loc), onsite: 1, receiving: 0,
+          what: (a.module_type || a.device_type || a.inventoryitem_type)?.model || a.name.split("_")[0] });
+      }
+    }
+    // The ticket's site first, then the most stock.
+    const out = [...rows.values()].filter((r) => r.onsite + r.receiving > 0)
+      .sort((a, b) => (b.site === siteCode) - (a.site === siteCode) || b.onsite - a.onsite);
+    return { ok: true, rows: out, at: Date.now() };
+  } catch (e) {
+    return { ok: false, error: e.message, auth: e instanceof NetboxAuthError };
+  }
+}
+
+function stockSummary(stock, siteCode) {
+  if (!stock?.ok) return stock?.error || "";
+  if (!stock.rows.length) return "none in storage";
+  const here = stock.rows.filter((r) => r.site === siteCode).reduce((n, r) => n + r.onsite, 0);
+  const total = stock.rows.reduce((n, r) => n + r.onsite, 0);
+  return `${siteCode ? `${here} at ${siteCode}, ` : ""}${total} in storage overall`;
+}
+
+// NetBox stock types (consumable types), cached for a day: used to find the same kind of part stocked under
+// another number (e.g. catalog Samsung 64 GB DDR5 RDIMM → NetBox 207-000002 "Hynix 64 GB ECC DDR5 RDIMM").
+async function netboxStockTypes(settings) {
+  const cached = (await chrome.storage.local.get("nbTypes")).nbTypes;
+  if (cached?.base === nbBase(settings) && Date.now() - cached.at < 24 * 60 * 60 * 1000) return cached.types;
+  let types = [], path = "/api/plugins/inventory-consumables/consumable-types/?limit=1000";
+  while (path) {
+    const r = await nbGet(settings, path);
+    types = types.concat((r.results || []).map((t) => ({ name: t.name, pn: t.part_number || "", desc: t.description || "", comments: String(t.comments || "").slice(0, 200) })));
+    path = r.next ? new URL(r.next).pathname + new URL(r.next).search : null;
+  }
+  await chrome.storage.local.set({ nbTypes: { base: nbBase(settings), at: Date.now(), types } });
+  return types;
+}
+
+// Stock for a catalog part: by its own numbers, else the same kind of part by MPN or description.
+async function netboxStockForPart(settings, part, siteCode) {
+  const own = await netboxStock(settings, [part.lambda, part.legacy, part.mpn], siteCode);
+  if (!own.ok || own.rows.length) return own;
+  try {
+    const mpn = normPn(part.mpn);
+    const phrase = String(part.name || "").split("·")[0].toLowerCase().replace(/\s+/g, " ").trim();
+    const same = (await netboxStockTypes(settings)).filter((t) =>
+      (mpn.length >= 6 && normPn(`${t.pn} ${t.comments} ${t.name}`).includes(mpn)) ||
+      (phrase.length >= 8 && `${t.desc} ${t.name}`.toLowerCase().replace(/\s+/g, " ").includes(phrase))).slice(0, 3);
+    if (!same.length) return own;
+    const alt = await netboxStock(settings, same.map((t) => t.name), siteCode);
+    return { ...alt, sameType: same.map((t) => `${t.name}${t.desc ? ` (${t.desc})` : ""}`) };
+  } catch {
+    return own;
+  }
 }

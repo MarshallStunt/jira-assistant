@@ -144,6 +144,17 @@
       <label><input id="pingAuto" type="checkbox"> Ping the server's IP addresses automatically when a ticket is analyzed</label>
     </div>
 
+    <h2 data-tab="servers">Parts catalog</h2>
+
+    <div class="field">
+      <label for="catalogUrl">Lambda parts catalog (Google Sheets link)</label>
+      <div class="row">
+        <input id="catalogUrl" type="text" class="mono">
+        <button id="testCatalog" type="button">Test catalog</button>
+      </div>
+      <div id="catalogMsg" class="hint">The Parts card matches part numbers from the ticket, NetBox and the BMC against this sheet, shows each part's Lambda P/N first (with SKU, MPN and description), lets you search it, and opens the sheet on the part's row so you can confirm it. Paste any catalog link that opens in Google Sheets (a Google Sheet or an Excel file in Drive); you need access to it, and it's read once a day. Clear the field to go back to the default catalog. When you ask the AI chat about parts, the catalog rows that fit your question (about 30) are sent with it so it can answer with real Lambda P/Ns.</div>
+    </div>
+
     <h2 data-tab="jira">Jira</h2>
 
     <div class="field">
@@ -170,15 +181,8 @@
 
 
     <h2 data-tab="servers">BMC logins, health &amp; power</h2>
+    <div class="hint" style="margin-bottom:10px"><b>Check health</b> asks for the BMC password: copy the BMC IP (there's a button), find it in 1Password (<kbd class="k-quick"></kbd>), copy the password and paste it into the panel. The check starts as soon as you paste. The password is kept in memory until you close the panel, never saved or sent to the AI.</div>
 
-    <div class="field">
-      <label for="bmcLogin">BMC password for Check health</label>
-      <select id="bmcLogin">
-        <option value="paste">I paste it (copied from 1Password)</option>
-        <option value="1password">Automatic from 1Password CLI</option>
-      </select>
-      <div class="hint">With <b>I paste it</b>, Check health asks for the password: copy the BMC IP (there's a button), find it in 1Password (<kbd class="k-quick"></kbd>), copy the password and paste it into the panel. The check starts as soon as you paste. The password is kept in memory until you close the panel, never saved or sent to the AI.</div>
-    </div>
     <div class="field">
       <label for="bmcUser">BMC username</label>
       <input id="bmcUser" type="text" class="mono" placeholder="ADMIN">
@@ -188,37 +192,6 @@
       <label for="bmcUrl">BMC web address</label>
       <input id="bmcUrl" type="text" class="mono" placeholder="https://{ip}">
       <div class="hint">Used by the <b>Open BMC</b> button. <code>{ip}</code> is replaced with the BMC IP. Change it if your BMCs use http or a port, e.g. <code>http://{ip}:8080</code>.</div>
-    </div>
-
-    <div id="opBox">
-    <div class="hint" style="margin-bottom:10px">The ping helper finds the BMC's login in 1Password, copies the password (cleared after 30 s) and uses it to read health over Redfish. Passwords never reach the extension or the AI. Needs the 1Password CLI (<code>brew install 1password-cli</code>) with 1Password → Settings → Developer → <b>Integrate with 1Password CLI</b> turned on.<br>
-    Items are matched by website = BMC IP, then the BMC IP, hostname or serial in the item title.</div>
-
-    <div class="field">
-      <label for="opVault">Vault (optional)</label>
-      <input id="opVault" type="text" placeholder="All vaults">
-    </div>
-    <div class="field">
-      <label for="opTag">Only items with this tag (optional)</label>
-      <input id="opTag" type="text" placeholder="e.g. bmc">
-    </div>
-    <div class="field">
-      <label for="opFallbackItem">Fallback item (optional)</label>
-      <input id="opFallbackItem" type="text" placeholder="e.g. Default BMC login">
-      <div class="hint">Title or ID of the item to use when nothing matches, e.g. a shared default BMC login.</div>
-    </div>
-    <div class="field">
-      <label for="opAccount">1Password account (optional)</label>
-      <input id="opAccount" type="text" placeholder="e.g. lambdal.1password.com">
-      <div class="hint">Only needed if you're signed in to more than one account.</div>
-    </div>
-    <div class="field">
-      <label><input id="bmcHealthAuto" type="checkbox"> Read BMC health automatically when a ticket opens (may show a 1Password prompt)</label>
-      <div class="row" style="margin-top:8px">
-        <button id="testOp" type="button">Test 1Password</button>
-        <span id="opMsg" class="muted" style="align-self:center"></span>
-      </div>
-    </div>
     </div>
 
     <h2 data-tab="servers">NetBox &amp; Podcrawler</h2>
@@ -253,6 +226,17 @@
       <label><input id="podcrawlerStep" type="checkbox"> Add a “Rescan in Podcrawler” step to replacement tickets</label>
     </div>
 
+    <h2 data-tab="jira">People</h2>
+
+    <div class="field">
+      <label for="slackIn">Clicking a person's name opens Slack in</label>
+      <select id="slackIn">
+        <option value="browser">Slack in Chrome (opens the chat with them)</option>
+        <option value="app">The Slack desktop app (name copied)</option>
+      </select>
+      <div class="hint">With Slack in Chrome, the extension opens your chat with that person (it uses Slack's own search in your Slack tab; nothing is sent). If Slack is already open in a Chrome tab, that tab is used either way. The desktop app can't be controlled, so there the name is copied: press <kbd class="k-slack"></kbd> and paste.</div>
+    </div>
+
     <h2 data-tab="jira">AI instructions</h2>
 
     <div class="field">
@@ -270,6 +254,7 @@
     <div class="row save-bar">
       <button id="save" class="primary" type="button">Save</button>
       <span id="msg" class="muted" style="align-self:center"></span>
+      <span class="dev-contact muted"></span>
     </div>
   </div>
 
@@ -280,6 +265,7 @@
   <script src="netbox.js"></script>
   <script src="privacy.js"></script>
   <script src="bmc.js"></script>
+  <script src="catalog.js"></script>
   <script src="options.js"></script>
 </body>
 </html>

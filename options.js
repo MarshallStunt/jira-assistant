@@ -1,3 +1,5 @@
+// Settings page: load/save settings, model list, connection tests (AI, ping helper, NetBox, catalog), and tabs.
+
 const $ = (id) => document.getElementById(id);
 let models = {}; // per-provider chosen model, edited in this form before saving
 
@@ -93,15 +95,11 @@ async function load() {
   $("podcrawlerUrl").value = s.podcrawlerUrl;
   $("podcrawlerStep").checked = s.podcrawlerStep;
   document.querySelectorAll(".k-quick").forEach((k) => (k.textContent = KEYS.quickAccess));
+  document.querySelectorAll(".k-slack").forEach((k) => (k.textContent = KEYS.slackSearch));
+  $("slackIn").value = s.slackIn;
+  $("catalogUrl").value = s.catalogUrl;
   $("pingAuto").checked = s.pingAuto;
-  $("opVault").value = s.opVault;
-  $("opTag").value = s.opTag;
-  $("opFallbackItem").value = s.opFallbackItem;
-  $("opAccount").value = s.opAccount;
-  $("bmcHealthAuto").checked = s.bmcHealthAuto;
-  $("bmcLogin").value = s.bmcLogin;
   $("bmcUser").value = s.bmcUser;
-  showBmcLogin();
   // Windows: PowerShell + .ps1 scripts (the Desktop may be redirected to OneDrive, so ask Windows where it is).
   const id = chrome.runtime.id;
   const winDir = `$([Environment]::GetFolderPath('Desktop'))\\jira-assistant`;
@@ -186,10 +184,9 @@ $("save").addEventListener("click", async () => {
     netboxToken: $("netboxToken").value.trim(),
     podcrawlerUrl: $("podcrawlerUrl").value.trim() || DEFAULTS.podcrawlerUrl,
     podcrawlerStep: $("podcrawlerStep").checked,
+    slackIn: $("slackIn").value,
+    catalogUrl: $("catalogUrl").value.trim() || DEFAULTS.catalogUrl,
     pingAuto: $("pingAuto").checked,
-    ...opForm(),
-    bmcHealthAuto: $("bmcHealthAuto").checked,
-    bmcLogin: $("bmcLogin").value,
     bmcUser: $("bmcUser").value.trim() || "ADMIN",
     privacyMode: $("privacyMode").checked,
     privacyHide: Object.fromEntries([...document.querySelectorAll("#privacyKinds input")].map((b) => [b.dataset.kind, b.checked])),
@@ -271,31 +268,18 @@ function setupTabs() {
   show(TABS.some(([id]) => id === saved) ? saved : "start");
 }
 setupTabs();
+fillDevContact();
 
-// The 1Password CLI options only matter in "Automatic from 1Password CLI" mode.
-function showBmcLogin() {
-  $("opBox").classList.toggle("mode-off", $("bmcLogin").value !== "1password"); // not "hidden": tabs use that
-}
-$("bmcLogin").addEventListener("change", showBmcLogin);
-
-function opForm() {
-  return {
-    opVault: $("opVault").value.trim(),
-    opTag: $("opTag").value.trim(),
-    opFallbackItem: $("opFallbackItem").value.trim(),
-    opAccount: $("opAccount").value.trim()
-  };
-}
-
-$("testOp").addEventListener("click", async () => {
-  const el = $("opMsg");
+$("testCatalog").addEventListener("click", async () => {
+  const el = $("catalogMsg");
   el.style.color = "";
-  el.textContent = "Testing… approve the 1Password prompt if one appears.";
-  const r = await sendNative({ action: "op_check", op: opConfig(opForm()) });
-  if (r.ok) {
-    el.textContent = `✓ 1Password works — ${r.items} item${r.items === 1 ? "" : "s"} to search${r.vault ? ` in ${r.vault}` : ` in ${r.vaults} vault${r.vaults === 1 ? "" : "s"}`}.`;
-  } else {
-    el.textContent = /unknown action/i.test(r.error || "") ? "The ping helper is out of date. Re-run the install command above." : r.error;
+  el.textContent = "Reading the catalog…";
+  try {
+    const c = await loadCatalog($("catalogUrl").value.trim() || DEFAULTS.catalogUrl, true);
+    el.textContent = `✓ ${c.parts.length.toLocaleString()} parts loaded (${c.parts.filter((p) => p.lambda).length.toLocaleString()} with a Lambda P/N).`;
+    el.style.color = "var(--ok)";
+  } catch (e) {
+    el.textContent = e.message;
     el.style.color = "var(--err)";
   }
 });

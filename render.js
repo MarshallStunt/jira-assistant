@@ -139,10 +139,11 @@ function renderBrief(root, r, opts) {
         return li;
       }))));
   }
-  if (r.parts_tools.length) {
-    root.appendChild(section("🧰 Parts & tools",
-      h("div", { class: "chips" }, r.parts_tools.map((t) => h("span", { class: "chip" }, t)))));
-  }
+  // Parts: what the AI read in the ticket, plus matches from the Lambda parts catalog (filled in later).
+  root.appendChild(h("section", { class: "card", id: "parts" },
+    h("div", { class: "label" }, "🧰 Parts & tools"),
+    r.parts_tools.length ? h("div", { class: "chips" }, r.parts_tools.map((t) => h("span", { class: "chip" }, t))) : null,
+    h("div", { id: "catalogBox" })));
 
   // 7. Reference: history, NetBox record, open questions
   root.appendChild(fold("history", `🕘 History${r.history.length ? ` (${r.history.length})` : ""}`, false,
@@ -288,6 +289,7 @@ function renderNetbox(box, state, actions) {
       ["Site", [d.site, d.location].filter(Boolean).join(" · ")],
       ["Rack / RU", [d.rack && `Rack ${d.rack}`, d.position != null && `RU ${d.position}`, d.face].filter(Boolean).join(" · ")],
       ["Serial", d.serial, true],
+      ["Lambda SKU", d.legacyLpn, true],
       ["Asset tag", d.assetTag, true],
       ["Tenant", [d.tenant, d.cluster].filter(Boolean).join(" · ")],
       ["Host IP", d.primaryIp, true],
@@ -305,6 +307,22 @@ function renderNetbox(box, state, actions) {
         ? `last activity ${timeAgo(d.podcrawler.at)}${d.podcrawler.text ? ` — ${d.podcrawler.text}` : ""}`
         : "no scan found in NetBox journal"),
       h("button", { class: "mini", title: "Opens Podcrawler and copies the hostname so you can paste it", onclick: () => actions.onOpenPodcrawler(d.name) }, "Open ", icon("external", 11))));
+
+    // Work history from the NetBox journal (credentials already removed)
+    if (d.history?.length) {
+      dev.appendChild(h("details", { class: "nb-ifs" },
+        h("summary", {}, `📝 Journal (${d.history.length})`),
+        h("ul", { class: "nb-journal" }, d.history.map((j) => h("li", {},
+          h("span", { class: "muted" }, `${new Date(j.at).toLocaleDateString()}${j.by ? ` · ${j.by}` : ""} · `), j.text)))));
+    }
+    // Installed modules (transceivers etc.)
+    if (d.modules?.length) {
+      dev.appendChild(h("details", { class: "nb-ifs" },
+        h("summary", {}, `🧩 Modules (${d.modules.length})`),
+        h("div", { class: "nb-if-list" }, d.modules.map((m) => h("div", { class: "nb-if" },
+          h("span", { class: "mono nb-if-name" }, m.bay),
+          h("span", { class: "nb-if-peer" }, [m.vendor, m.model, m.partNumber && m.partNumber !== m.model && `P/N ${m.partNumber}`].filter(Boolean).join(" · ")))))));
+    }
 
     // Cabling (collapsed)
     const cabled = d.interfaces.filter((i) => i.peer);

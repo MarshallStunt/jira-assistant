@@ -1,5 +1,7 @@
-// Side panel: detects the open Jira issue, reads it (fields, comments, history),
-// asks the selected AI provider for a DC Ops brief, and renders it.
+// Side panel: detects the open Jira issue, reads it (fields, comments, history), asks the selected AI provider
+// for a DC Ops brief and renders it, then runs the lookups around it: NetBox, ping, BMC, parts catalog & stock.
+// Sections: Jira · AI · progress line & jump links · status, toast, people · NetBox · parts · BMC · reachability ·
+// analyze & tab events.
 
 const $ = (id) => document.getElementById(id);
 let current = { tabId: null, key: null, running: false };
@@ -155,8 +157,6 @@ async function analyzeIssue(settings, key, issueText, onPartial, privacy) {
   return { brief, model: `${providerLabel(settings.provider)} · ${model}` };
 }
 
-// ---------- UI ----------
-
 // ---------- Progress line ----------
 // One line under the header for everything that runs when a ticket opens, instead of a spinner per card.
 const STEP_LABELS = { ticket: "Ticket", ai: "AI brief", netbox: "NetBox", ping: "Ping" };
@@ -207,6 +207,8 @@ let jumpFrame;
 new MutationObserver(() => { cancelAnimationFrame(jumpFrame); jumpFrame = requestAnimationFrame(updateJump); })
   .observe($("result"), { childList: true, subtree: true, attributes: true, attributeFilter: ["class"] });
 
+// ---------- Status, toast, people ----------
+
 function setStatus(msg, kind = "") {
   const el = $("status");
   if (!msg) return el.classList.add("hidden");
@@ -233,9 +235,19 @@ function toast(msg, ms = 6000) {
   toastTimer = setTimeout(() => el.classList.remove("show"), ms);
 }
 
-// Clicking a person opens the Slack app with their name on the clipboard: press ⌘K / Ctrl+K and paste.
+// Clicking a person opens your Slack chat with them.
+// Slack in Chrome (an open tab, or a new one if Settings says browser): the extension finds the person and opens the
+// chat. The Slack desktop app can't be driven, so then the name is copied for ⌘K / Ctrl+K + paste.
 async function openSlack(name) {
-  await navigator.clipboard.writeText(name).catch(() => {});
+  await navigator.clipboard.writeText(name).catch(() => {}); // fallback, and while we still have the click
+  const inBrowser = (await getSettings()).slackIn === "browser";
+  const [tab] = await chrome.tabs.query({ url: "https://app.slack.com/*" });
+  if (tab || inBrowser) {
+    toast(["Opening Slack chat with ", h("b", {}, name), "…"], 8000);
+    const r = await openSlackDm(name, { openIfMissing: inBrowser });
+    if (r.ok) return toast(["💬 Chat with ", h("b", {}, name), " is open in Slack. Type your message there."]);
+    return toast([`Couldn't open the chat (${r.why}). The name is copied: in Slack press `, h("kbd", {}, KEYS.slackSearch), " and paste."], 8000);
+  }
   h("a", { href: "slack://open" }).click();
   toast(["Name copied. In Slack press ", h("kbd", {}, KEYS.slackSearch), " and paste to open the chat with ", h("b", {}, name), "."]);
 }
@@ -322,10 +334,80 @@ async function startLookups(key, entry, force = false) {
   }
   if (run !== lookupRun || current.key !== key) return;
   setupBmc(key, entry, nb);
+  setupParts(key, entry, nb);
   setupPing(key, entry.brief, entry.ticketIps || [], netboxPingTargets(nb));
 }
 
-// ---------- BMC (1Password login + Redfish health) ----------
+// ---------- Parts catalog & stock ----------
+
+function ticketSiteCode(brief, nb) {
+  const codes = [splitSite(brief?.location?.site).code, ...(nb?.ok ? nb.devices.map((d) => d.site) : [])];
+  return (codes.map((c) => String(c || "").match(/^[A-Z]{3}\d{2}/i)?.[0]).find(Boolean) || "").toUpperCase();
+}
+
+let partsView = null;
+
+async function setupParts(key, entry, nb) {
+  const settings = await getSettings();
+  const usedKey = `used:${key}`;
+  // The ticket's site code (e.g. ORD01), so its storage is listed first.
+  const site = ticketSiteCode(entry.brief, nb);
+  const saved = (await chrome.storage.session.get(usedKey))[usedKey] || [];
+  const state = { loading: true, matches: [], used: new Map(saved.map((p) => [partId(p), p])) };
+  const box = () => (current.key === key ? document.getElementById("catalogBox") : null);
+  const draw = () => renderCatalog(box(), state, actions);
+  if (lastResult?.key === key) lastResult.partsUsed = state.used;
+
+  // Ticket, brief and NetBox text; part numbers the BMC reports for failed components are flagged.
+  const match = () => {
+    if (!state.catalog) return;
+    const b = entry.brief;
+    const failedTexts = Object.values(lastResult?.key === key ? lastResult.bmc || {} : {})
+      .filter((x) => x?.ok).flatMap((x) => x.problems.map((p) => `${p.name} ${p.detail}`));
+    const failed = new Set(findCatalogParts(state.catalog, failedTexts).map(partId));
+    state.matches = findCatalogParts(state.catalog, [entry.issueText, b.request_summary, ...b.parts_tools, ...b.next_steps,
+      ...(nb?.ok ? nb.devices.map((d) => `${d.model} ${d.assetTag}`) : []), ...failedTexts])
+      .map((p) => ({ ...p, failed: failed.has(partId(p)) }))
+      .sort((a, b2) => b2.failed - a.failed);
+    // The server's own catalog entry, from NetBox's Lambda SKU (legacy_LPN).
+    const lpns = nb?.ok ? nb.devices.map((d) => d.legacyLpn).filter(Boolean) : [];
+    state.servers = state.catalog.parts.filter((p) => lpns.includes(p.legacy));
+  };
+  const actions = {
+    onUsed: (p, on) => {
+      const id = partId(p);
+      on ? state.used.set(id, p) : state.used.delete(id);
+      chrome.storage.session.set({ [usedKey]: [...state.used.values()] });
+    },
+    openRow: (row) => openUrl(catalogSheetUrl(settings.catalogUrl, row)),
+    onStock: settings.netboxEnabled ? async (p, box) => {
+      renderStock(box, "loading", site);
+      renderStock(box, await netboxStockForPart(settings, p, site), site);
+    } : null,
+    onAsk: () => askAI("Which part do I need to swap? Give me the Lambda P/N."),
+    onReload: async () => {
+      state.loading = true;
+      draw();
+      await load(true);
+    }
+  };
+  const load = async (force) => {
+    try {
+      state.catalog = await loadCatalog(settings.catalogUrl, force);
+      state.error = "";
+      match();
+    } catch (e) {
+      state.error = e.message;
+    }
+    state.loading = false;
+    if (current.key === key) draw();
+  };
+  partsView = { key, update: () => { match(); draw(); } };
+  draw();
+  await load(false);
+}
+
+// ---------- BMC (pasted login, Redfish health and power) ----------
 
 // The BMC card of the ticket on screen, so ping results can update it when they arrive.
 let bmcView = null;
@@ -340,7 +422,7 @@ async function setupBmc(key, entry, nb) {
   const who = bmcTargets(entry.brief, nb, findSerialsInText(entry.issueText || ""));
   const cacheKey = `bmc:${key}`;
   const state = {
-    who, copy: {}, showLogin: {}, creds: {}, power: {}, mode: settings.bmcLogin, user: settings.bmcUser || "ADMIN",
+    who, showLogin: {}, creds: {}, power: {}, user: settings.bmcUser || "ADMIN",
     verdict: entry.brief.power_down, reach: pingByIp(lastResult?.key === key ? lastResult.ping : null),
     health: (await chrome.storage.session.get(cacheKey))[cacheKey] || {}
   };
@@ -354,35 +436,21 @@ async function setupBmc(key, entry, nb) {
   const readHealth = async (ip) => {
     state.health[ip] = "loading";
     draw();
-    const x = await readBmcHealth(settings, ip, who, state.creds[ip]);
+    const x = await readBmcHealth(ip, state.creds[ip]);
     state.health[ip] = x;
     if (x.ok) state.showLogin[ip] = false;
-    else if (/1password/i.test(x.error || "")) state.showLogin[ip] = true;
     else if (/rejected the login/i.test(x.error || "") && state.creds[ip]) { delete state.creds[ip]; state.showLogin[ip] = true; }
     await saveHealth();
+    if (partsView?.key === key) partsView.update(); // failed parts from the BMC → catalog lookup
     draw();
   };
   const actions = {
     openBmc,
     onSetup: () => chrome.runtime.openOptionsPage(),
-    onCopy: async (ip) => {
-      state.copy[ip] = "loading";
-      draw();
-      const resp = await copyBmcPassword(settings, ip, who);
-      state.copy[ip] = resp;
-      if (!resp.ok && /1password/i.test(resp.error || "")) state.showLogin[ip] = true; // offer the pasted login
-      draw();
-      // The helper clears the clipboard; drop the "copied" note at the same time.
-      if (resp.ok) setTimeout(() => { if (state.copy[ip] === resp) { delete state.copy[ip]; draw(); } }, resp.clears_in * 1000);
-    },
-    onShowLogin: (ip) => {
-      state.showLogin[ip] = true;
-      draw();
-    },
     onHealth: (ip, login) => {
       if (login) state.creds[ip] = login; // memory only, for "↻ Health" and power actions
-      // Paste mode without a password yet: ask for it (the clipboard is left alone, it may hold the password).
-      if (state.mode !== "1password" && !state.creds[ip]) {
+      // No password yet: ask for it (the clipboard is left alone, it may already hold the password).
+      if (!state.creds[ip]) {
         state.showLogin[ip] = true;
         draw();
         return;
@@ -394,7 +462,7 @@ async function setupBmc(key, entry, nb) {
       draw();
     },
     onPower: async (ip, resetType, confirm) => {
-      if (state.mode !== "1password" && !state.creds[ip]) {
+      if (!state.creds[ip]) {
         state.power[ip] = { result: { ok: false, error: "Paste the BMC password first (click ↻ Health)." } };
         state.showLogin[ip] = true;
         return draw();
@@ -402,7 +470,7 @@ async function setupBmc(key, entry, nb) {
       state.power[ip] = { busy: true };
       draw();
       const label = { GracefulShutdown: "Shutdown", ForceOff: "Force off", On: "Power on" }[resetType];
-      const resp = await bmcPower(settings, ip, who, state.creds[ip], resetType, confirm);
+      const resp = await bmcPower(ip, state.creds[ip], resetType, confirm);
       state.power[ip] = { result: { ...resp, label } };
       if (resp.ok && lastResult?.key === key) {
         lastResult.bmcPower = [...(lastResult.bmcPower || []), { ip, label, at: resp.at, before: resp.before }];
@@ -415,8 +483,6 @@ async function setupBmc(key, entry, nb) {
   bmcView = { key, state, draw };
   if (lastResult?.key === key) lastResult.bmc = state.health;
   draw();
-  const first = who.ips[0];
-  if (settings.bmcHealthAuto && state.mode === "1password" && first && !state.health[first]) actions.onHealth(first);
 }
 
 // ---------- Reachability ----------
@@ -464,6 +530,8 @@ async function setupPing(key, brief, ticketIps, extraTargets = []) {
   if (fresh || !settings.pingAuto) renderPing(box(), { targets, resp: cached }, actions);
   else doPing();
 }
+
+// ---------- Analyze & tab events ----------
 
 async function analyze(force = false) {
   if (!current.key || current.running) return;
@@ -581,15 +649,20 @@ chrome.windows.onFocusChanged.addListener(scheduleRefresh);
 
 $("settingsBtn").replaceChildren(icon("settings", 16));
 $("chatSend").replaceChildren(icon("send", 15));
-$("copyBtn").prepend(icon("copy", 13), " ");
 
 $("analyzeBtn").addEventListener("click", () => analyze(true));
 $("settingsBtn").addEventListener("click", () => chrome.runtime.openOptionsPage());
-$("copyBtn").addEventListener("click", async () => {
+// Copy as Jira comment (button at the end of the brief).
+async function copyComment() {
   if (!lastResult) return;
-  await navigator.clipboard.writeText(asJiraComment(lastResult.key, lastResult.brief, lastResult.ping, lastResult.netbox, lastResult.bmc, lastResult.bmcPower));
-  $("copyBtn").replaceChildren(icon("check", 13), " Copied");
-  setTimeout(() => $("copyBtn").replaceChildren(icon("copy", 13), " Copy as Jira comment"), 1500);
-});
+  const comment = [asJiraComment(lastResult.key, lastResult.brief, lastResult.ping, lastResult.netbox, lastResult.bmc, lastResult.bmcPower),
+    ...partsCommentLines(lastResult.partsUsed)].join("\n");
+  await navigator.clipboard.writeText(comment);
+  $("copyBtn").textContent = "✅ Copied";
+  toast("Copied. Paste it as a comment in the Jira ticket.", 3000);
+  setTimeout(() => ($("copyBtn").textContent = "📋 Copy as Jira comment"), 1500);
+}
+$("copyBtn").addEventListener("click", copyComment);
 
+fillDevContact();
 refresh();

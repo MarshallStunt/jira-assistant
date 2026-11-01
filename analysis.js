@@ -70,7 +70,7 @@ const DC_SCHEMA = {
     },
     parts_tools: {
       type: "array", items: { type: "string" },
-      description: "Spare parts (with part numbers/serials if given), tools and access needed. Empty if none."
+      description: "Spare parts and tools needed. Name the component to swap by type and model (e.g. 'H100 SXM5 80GB GPU', '64GB DDR5 RDIMM', 'PSU'), not the ticket's part number field, which is usually the whole server/chassis. Empty if none."
     },
     cautions: {
       type: "array", items: { type: "string" },
@@ -96,6 +96,7 @@ Rules:
 - Read ALL comments and history. Summarize previous work, requests and findings in the history list, and state where things stand now.
 - Power-down safety is critical. Only answer "approved" if there is explicit evidence (approval, drained/cordoned, maintenance window, customer OK, already down, decommission). If the ticket says not to, or a customer workload may be running, answer "do_not". If unclear, answer "confirm_first". Hot-swappable work that doesn't need power-down is "not_needed". Later comments override earlier ones.
 - After any hardware replacement or swap that changes a serial number or MAC address (node, motherboard, NIC, BMC, GPU tray, drive with serial tracking), include a step to rescan the server in Podcrawler so NetBox, Yard and FastTrack get the new serial and MACs.
+- The part number shown on a ticket is almost always the server/chassis part number, not the part to replace. Work out the failing component (GPU H100/H200/B200, GPU baseboard, DIMM, PSU, fan, NIC, drive, cable…) from the description, comments and errors, and list that component in parts_tools. Never present the chassis part number as the replacement part.
 - Next steps must be practical, hands-on and in order. Put verification (e.g. check BMC/IPMI, confirm serial, confirm node drained) before risky actions.
 - Be brief: a technician should understand the ticket in 10 seconds.`;
   if (teamContext?.trim()) p += `\n\nTeam procedures and conventions (follow these):\n${teamContext.trim()}`;

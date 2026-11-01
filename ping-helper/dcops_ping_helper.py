@@ -6,8 +6,7 @@ Chrome extensions cannot send ICMP pings, so the extension asks this helper to:
   - resolve each address (DNS),
   - ping it,
   - report which local network interface the traffic is routed through.
-It also handles BMC work that needs credentials (1Password logins never reach the extension):
-  - finds the BMC's login in 1Password (via the `op` CLI) and copies the password to the clipboard,
+It also talks to the server's BMC with the login the user pasted in the panel:
   - reads the server's health from the BMC's Redfish API (GETs),
   - shuts down / powers on the server through Redfish, only when the user confirmed it in the panel.
 
@@ -15,14 +14,10 @@ Protocol: Chrome native messaging (4-byte native-endian length + UTF-8 JSON) on 
 Requests:
   {"action": "hello"}
   {"action": "ping", "targets": [{"address": "host-01", "role": "host"}, ...], "count": 3}
-  {"action": "bmc_copy_password", "ip": "10.1.2.3", "names": ["host-01"], "serials": ["S123"], "op": {...}}
-  {"action": "bmc_health", "ip": "10.1.2.3", "names": [...], "serials": [...], "op": {...}, "port": 443}
-      optional "login": {"user": "ADMIN", "password": "..."} skips 1Password (typed in the panel)
-  {"action": "bmc_power", "ip": "10.1.2.3", "reset_type": "GracefulShutdown" | "ForceOff" | "On", "confirm": "10.1.2.3", ...}
-  {"action": "op_check", "op": {...}}
-  "op" settings: {"vault": "", "account": "", "tag": "", "fallback": ""} (all optional).
+  {"action": "bmc_health", "ip": "10.1.2.3", "login": {"user": "ADMIN", "password": "..."}, "port": 443}
+  {"action": "bmc_power", "ip": "10.1.2.3", "login": {...}, "reset_type": "GracefulShutdown" | "ForceOff" | "On", "confirm": "10.1.2.3"}
 Only hostnames / IP addresses are accepted, BMC requests only go to private IPs, and commands are run
-without a shell. Passwords are never sent back to the extension.
+without a shell. Logins are used for the one request and never stored.
 """
 
 import base64
@@ -43,7 +38,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 MAX_TARGETS = 12
 IS_MAC = sys.platform == "darwin"
 IS_WIN = sys.platform == "win32"
@@ -81,11 +76,9 @@ def find_cmd(name):
     path = shutil.which(name)
     if path:
         return path
-    # Chrome starts the helper with a minimal PATH, so also look where Homebrew/winget/1Password install things.
+    # Chrome starts the helper with a minimal PATH, so also look in the usual system folders.
     if IS_WIN:
-        local = os.environ.get("LOCALAPPDATA", "")
-        dirs = (os.path.join(local, "Microsoft", "WinGet", "Links"), os.path.join(os.environ.get("ProgramFiles", ""), "1Password CLI"),
-                os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32"),
+        dirs = (os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32"),
                 os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "WindowsPowerShell", "v1.0"))
         names = (name + ".exe", name)
     else:
@@ -306,141 +299,10 @@ def check_target(target, count):
     return res
 
 
-# ---------- 1Password (BMC logins) ----------
-
-OP_TIMEOUT = 90  # long enough for the user to approve the Touch ID / 1Password prompt
-CLIPBOARD_CLEAR_S = 30
-
+# ---------- BMC login ----------
 
 class HelperError(Exception):
     pass
-
-
-def op_settings(raw):
-    """Vault/account/tag/fallback names from the extension. They go into argv, so refuse anything flag-like."""
-    out = {}
-    for k in ("vault", "account", "tag", "fallback"):
-        v = str((raw or {}).get(k) or "").strip()[:120]
-        if v.startswith("-"):
-            raise HelperError(f"Invalid 1Password {k}: {v}")
-        out[k] = v
-    return out
-
-
-def op_error(text):
-    # op prints the error first, then sometimes a list of sign-in options; the first line is the one that matters.
-    lines = [l.strip() for l in text.splitlines() if l.strip()]
-    t = next((l for l in lines if l.startswith("[ERROR]")), lines[0] if lines else "unknown error")
-    t = re.sub(r"^\[ERROR\]\s*[\d/: ]*", "", t)
-    low = t.lower()
-    if "not currently signed in" in low or "no accounts configured" in low or "account is not signed in" in low:
-        return ("1Password CLI isn't connected to the 1Password app. In 1Password open Settings → Developer and "
-                "tick “Integrate with 1Password CLI” (the macOS “op would like to access data” prompt is a "
-                "different permission: allow it too), then try again.")
-    if "dismissed" in low or "authorization" in low and "denied" in low:
-        return "The 1Password prompt was dismissed."
-    if "isn't a vault" in low or "vault" in low and "not found" in low:
-        return f"1Password vault not found ({t}). Check the vault name in Settings."
-    return f"1Password: {t}"
-
-
-def op_json(args, cfg):
-    cmd = find_cmd("op")
-    if not cmd:
-        raise HelperError("1Password CLI (op) is not installed. Install it with: "
-                          + ("winget install AgileBits.1Password.CLI" if IS_WIN else "brew install 1password-cli"))
-    full = [cmd] + args + ["--format", "json"]
-    if cfg.get("account"):
-        full += ["--account", cfg["account"]]
-    try:
-        p = subprocess.run(full, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL, timeout=OP_TIMEOUT, **NO_WINDOW)
-    except subprocess.TimeoutExpired:
-        raise HelperError("1Password didn't answer (prompt not approved in time?).")
-    if p.returncode != 0:
-        raise HelperError(op_error(p.stderr.decode("utf-8", "replace")))
-    return json.loads(p.stdout.decode("utf-8") or "null")
-
-
-def _norm(v):
-    return re.sub(r"[^a-z0-9]", "", str(v or "").lower())
-
-
-def _url_host(href):
-    href = str(href or "").strip()
-    if not href:
-        return ""
-    if "://" not in href:
-        href = "https://" + href
-    try:
-        return (urllib.parse.urlsplit(href).hostname or "").lower()
-    except ValueError:
-        return ""
-
-
-def _words(title):
-    return set(w.lower() for w in re.split(r"[\s,;|()\[\]/]+", str(title or "")) if w)
-
-
-def find_bmc_item(cfg, ip, names, serials):
-    """Best 1Password item for this BMC: URL = BMC IP, then title with the IP, hostname or serial,
-    then the configured fallback item. Returns (item, how_matched, other_candidates)."""
-    args = ["item", "list"]
-    if cfg["vault"]:
-        args += ["--vault", cfg["vault"]]
-    if cfg["tag"]:
-        args += ["--tags", cfg["tag"]]
-    items = op_json(args, cfg) or []
-    names = [n.lower() for n in names if n]
-    serials = [_norm(s) for s in serials if s]
-
-    tiers = [
-        ("website is the BMC IP", lambda it: any(_url_host(u.get("href")) == ip for u in it.get("urls") or [])),
-        ("title has the BMC IP", lambda it: ip in _words(it.get("title"))),
-        ("title has the hostname", lambda it: any(n in _words(it.get("title")) or n.split(".")[0] in _words(it.get("title")) for n in names)),
-        ("title has the serial", lambda it: any(s and s in _norm(it.get("title")) for s in serials)),
-    ]
-    if cfg["fallback"]:
-        fb = cfg["fallback"].lower()
-        tiers.append(("fallback item", lambda it: str(it.get("title", "")).lower() == fb or it.get("id") == cfg["fallback"]))
-    for how, test in tiers:
-        hits = [it for it in items if test(it)]
-        if hits:
-            return hits[0], how, len(hits) - 1
-    where = f" in vault “{cfg['vault']}”" if cfg["vault"] else ""
-    raise HelperError(f"No 1Password item found for BMC {ip}{where}. Looked for its IP as the website, "
-                      f"or the IP / hostname / serial in the title.")
-
-
-def item_login(cfg, item):
-    full = op_json(["item", "get", item["id"]] + (["--vault", item["vault"]["id"]] if item.get("vault", {}).get("id") else []), cfg)
-    fields = full.get("fields") or []
-
-    def pick(purpose, labels, concealed=False):
-        for f in fields:
-            if f.get("purpose") == purpose and f.get("value"):
-                return f["value"]
-        for f in fields:
-            label = str(f.get("label", "")).lower()
-            if f.get("value") and any(l in label for l in labels) and (not concealed or f.get("type") == "CONCEALED"):
-                return f["value"]
-        return ""
-
-    user = pick("USERNAME", ("username", "user", "login"))
-    password = pick("PASSWORD", ("password",), concealed=True) or pick("PASSWORD", ("password",))
-    if not password:
-        raise HelperError(f"1Password item “{item.get('title')}” has no password field.")
-    return user, password
-
-
-def bmc_login(msg):
-    ip = bmc_ip(msg.get("ip"))
-    cfg = op_settings(msg.get("op"))
-    names = [str(n).strip()[:80] for n in (msg.get("names") or [])[:8] if isinstance(n, str)]
-    serials = [str(s).strip()[:60] for s in (msg.get("serials") or [])[:8] if isinstance(s, str)]
-    item, how, others = find_bmc_item(cfg, ip, names, serials)
-    user, password = item_login(cfg, item)
-    info = {"title": item.get("title", ""), "vault": (item.get("vault") or {}).get("name", ""), "match": how, "others": others}
-    return ip, user, password, info
 
 
 def bmc_ip(value):
@@ -453,63 +315,7 @@ def bmc_ip(value):
     return str(ip)
 
 
-# Runs detached after we exit: clears the clipboard after N seconds unless something else was copied.
-# The secret arrives on stdin so it never shows up in the process list.
-CLEAR_SCRIPT = (
-    "import json,subprocess,sys,time\n"
-    "s=sys.stdin.buffer.read();time.sleep(float(sys.argv[1]))\n"
-    "c,p=json.loads(sys.argv[2]),json.loads(sys.argv[3]);f=json.loads(sys.argv[4])\n"
-    "try:\n"
-    " if subprocess.run(p,stdout=subprocess.PIPE,timeout=5,**f).stdout.strip()==s.strip():subprocess.run(c,input=b'',timeout=5,**f)\n"
-    "except Exception:pass\n"
-)
-
-
-def clipboard_cmds():
-    """(copy from stdin, read, clear) commands."""
-    if IS_MAC:
-        return [find_cmd("pbcopy")], [find_cmd("pbpaste")], [find_cmd("pbcopy")]
-    if IS_WIN:
-        ps = [find_cmd("powershell") or "powershell", "-NoProfile", "-NonInteractive", "-Command"]
-        return (ps + ["$t = [Console]::In.ReadToEnd(); Set-Clipboard -Value $t"],
-                ps + ["[Console]::OutputEncoding = [Text.Encoding]::UTF8; Get-Clipboard -Raw"],
-                ps + ["Set-Clipboard -Value ' '"])
-    if os.environ.get("WAYLAND_DISPLAY") and find_cmd("wl-copy"):
-        return [find_cmd("wl-copy")], [find_cmd("wl-paste"), "-n"], [find_cmd("wl-copy")]
-    if find_cmd("xclip"):
-        xc = [find_cmd("xclip"), "-selection", "clipboard"]
-        return xc, xc + ["-o"], xc
-    raise HelperError("No clipboard tool found (install xclip or wl-clipboard).")
-
-
-def copy_secret(secret):
-    copy, paste, clear = clipboard_cmds()
-    data = secret.encode("utf-8")
-    subprocess.run(copy, input=data, timeout=10, check=True, **NO_WINDOW)
-    detach = {"creationflags": 0x08000000 | 0x00000008} if IS_WIN else {"start_new_session": True}  # + DETACHED_PROCESS
-    child = subprocess.Popen([sys.executable, "-c", CLEAR_SCRIPT, str(CLIPBOARD_CLEAR_S), json.dumps(clear), json.dumps(paste), json.dumps(NO_WINDOW)],
-                             stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **detach)
-    child.stdin.write(data)
-    child.stdin.close()
-
-
-def op_check(msg):
-    """Settings page test: is `op` signed in, and how many items would be searched?"""
-    cfg = op_settings(msg.get("op"))
-    vaults = op_json(["vault", "list"], cfg) or []
-    if cfg["vault"] and not any(cfg["vault"] in (v.get("name"), v.get("id")) for v in vaults):
-        raise HelperError(f"Vault “{cfg['vault']}” not found. You can see: {', '.join(v.get('name', '?') for v in vaults) or 'no vaults'}.")
-    args = ["item", "list"] + (["--vault", cfg["vault"]] if cfg["vault"] else []) + (["--tags", cfg["tag"]] if cfg["tag"] else [])
-    return {"ok": True, "vaults": len(vaults), "vault": cfg["vault"], "items": len(op_json(args, cfg) or [])}
-
-
-def bmc_copy_password(msg):
-    ip, user, password, info = bmc_login(msg)
-    copy_secret(password)
-    return {"ok": True, "ip": ip, "username": user, "item": info, "clears_in": CLIPBOARD_CLEAR_S}
-
-
-# ---------- Redfish (BMC health, read-only) ----------
+# ---------- Redfish (BMC health and power) ----------
 
 REDFISH_TIMEOUT = 15
 MAX_BODY = 8 * 1024 * 1024
@@ -652,7 +458,8 @@ def system_problems(rf, system):
         if (st.get("HealthRollup") or st.get("Health")) in BAD_HEALTH and _link(system, link):
             coll = rf._try_get(_link(system, link)) or {}
             for m in rf.members(coll, 64):
-                p = _problem(label, m, m.get("Model") or m.get("PartNumber") or "")
+                # The manufacturer part number first: the extension looks it up in the parts catalog.
+                p = _problem(label, m, (m.get("PartNumber") or m.get("Model") or "").strip())
                 if p:
                     out.append(p)
     for link, label in (("Storage", "Storage"), ("SimpleStorage", "Storage")):
@@ -730,18 +537,16 @@ def recent_events(rf, owners, limit=10):
 
 
 def bmc_session(msg):
-    """Redfish client for msg["ip"], logged in with the typed login or the 1Password item."""
+    """Redfish client for msg["ip"], logged in with the login pasted in the panel (used for this request only)."""
     login = msg.get("login")
-    if isinstance(login, dict) and login.get("password"):
-        # Pasted into the panel when 1Password isn't used; used for this request only.
-        ip, info = bmc_ip(msg.get("ip")), None
-        user, password = str(login.get("user") or "")[:64], str(login["password"])[:256]
-    else:
-        ip, user, password, info = bmc_login(msg)
+    if not isinstance(login, dict) or not login.get("password"):
+        raise HelperError("Paste the BMC password in the panel first.")
+    ip = bmc_ip(msg.get("ip"))
+    user, password = str(login.get("user") or "")[:64], str(login["password"])[:256]
     port = int(msg.get("port") or 443)
     if not 0 < port < 65536:
         raise HelperError("Invalid Redfish port.")
-    return ip, info, Redfish(ip, user, password, port)
+    return ip, Redfish(ip, user, password, port)
 
 
 def first_system(rf):
@@ -762,7 +567,7 @@ def bmc_power(msg):
         raise HelperError(f"Unsupported power action: {reset!r}")
     if str(msg.get("confirm") or "").strip() != str(msg.get("ip") or "").strip():
         raise HelperError("Power action not confirmed.")
-    ip, info, rf = bmc_session(msg)
+    ip, rf = bmc_session(msg)
     _, system = first_system(rf)
     action = (system.get("Actions") or {}).get("#ComputerSystem.Reset") or {}
     target = action.get("target")
@@ -781,9 +586,9 @@ def bmc_power(msg):
 
 def bmc_health(msg):
     start = time.time()
-    ip, info, rf = bmc_session(msg)
+    ip, rf = bmc_session(msg)
     root, system = first_system(rf)
-    result = {"ok": True, "ip": ip, "item": info, "warnings": []}
+    result = {"ok": True, "ip": ip, "warnings": []}
     health, rollup, _ = _status(system)
     result["system"] = {
         "power": system.get("PowerState") or "",
@@ -830,7 +635,7 @@ def handle(msg):
         with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, len(targets))) as pool:
             results = list(pool.map(lambda t: check_target(t, count), targets))
         return {"ok": True, "version": VERSION, "results": results, "at": int(time.time() * 1000)}
-    handlers = {"bmc_copy_password": bmc_copy_password, "bmc_health": bmc_health, "bmc_power": bmc_power, "op_check": op_check}
+    handlers = {"bmc_health": bmc_health, "bmc_power": bmc_power}
     if action in handlers:
         try:
             return handlers[action](msg)

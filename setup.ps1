@@ -1,7 +1,6 @@
 # One-time setup for the Lambda DC Ops Assistant on Windows.
 # Installs what the extension needs on this computer, asking before each install:
-#   - Python 3                 -> for the ping / BMC helper
-#   - 1Password CLI (optional) -> only for "Automatic from 1Password CLI" BMC logins
+#   - Python 3   -> for the ping / BMC helper
 #   - the ping / BMC helper itself
 # Usage (PowerShell):  powershell -ExecutionPolicy Bypass -File setup.ps1 <extension-id>
 # (copy the exact command from the extension's Settings page)
@@ -33,7 +32,7 @@ Write-Host "Lambda DC Ops Assistant - setup" -ForegroundColor Cyan
 Write-Host "This installs the tools the extension needs. You'll be asked before anything is installed."
 
 # 1. Python -----------------------------------------------------------------
-Step "1/3  Python (for the ping and BMC helper)"
+Step "1/2  Python (for the ping and BMC helper)"
 if (HasPython) {
   Ok "Python is installed"
 } elseif ($HasWinget -and (Ask "Python isn't installed. Install it now with winget?")) {
@@ -45,18 +44,8 @@ if (HasPython) {
   exit 1
 }
 
-# 2. 1Password CLI (optional) -------------------------------------------------
-Step "2/3  1Password CLI (optional, for automatic BMC logins)"
-if (Get-Command op -ErrorAction SilentlyContinue) {
-  Ok "1Password CLI is installed"
-} elseif ($HasWinget -and (Ask "Install the 1Password CLI? (skip if you paste BMC passwords yourself)")) {
-  winget install -e --id AgileBits.1Password.CLI --accept-source-agreements --accept-package-agreements
-} else {
-  Warn "Skipped. You can still paste BMC passwords in the panel."
-}
-
-# 3. Helper ------------------------------------------------------------------
-Step "3/3  Ping and BMC helper"
+# 2. Helper ------------------------------------------------------------------
+Step "2/2  Ping and BMC helper"
 & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Dir "ping-helper\install.ps1") $ExtensionId
 if ($LASTEXITCODE -ne 0) { Fail "Helper install failed (see above)."; exit 1 }
 

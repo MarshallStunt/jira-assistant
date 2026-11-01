@@ -27,7 +27,7 @@
   <main id="result" class="hidden"></main>
 
   <div id="footer" class="footer hidden">
-    <button id="copyBtn">Copy as Jira comment</button>
+    <button id="copyBtn">📋 Copy as Jira comment</button>
     <span id="meta" class="muted"></span>
   </div>
 
@@ -38,11 +38,15 @@
     </div>
     <div id="chatLog" class="chat-log"></div>
     <div id="chatSuggest" class="chips"></div>
-    <form id="chatForm" class="chat-bar">
-      <textarea id="chatInput" rows="1" placeholder="Ask about this ticket…" title="Enter to send, Shift+Enter for a new line"></textarea>
-      <button id="chatSend" class="primary" type="submit" title="Send" aria-label="Send"></button>
-    </form>
   </section>
+
+  <div class="dev-contact muted"></div>
+
+  <!-- Always at the bottom of the panel: ask the AI about the open ticket. -->
+  <form id="chatForm" class="chat-bar dock hidden">
+    <textarea id="chatInput" rows="1" placeholder="💬 Ask the AI about this ticket…" title="Enter to send, Shift+Enter for a new line"></textarea>
+    <button id="chatSend" class="primary" type="submit" title="Send" aria-label="Send"></button>
+  </form>
 
   <script src="icons.js"></script>
   <script src="common.js"></script>
@@ -51,6 +55,8 @@
   <script src="netbox.js"></script>
   <script src="privacy.js"></script>
   <script src="bmc.js"></script>
+  <script src="catalog.js"></script>
+  <script src="slack.js"></script>
   <script src="render.js"></script>
   <script src="sidepanel.js"></script>
   <script src="chat.js"></script>

@@ -1,11 +1,7 @@
-// BMC card: BMC login (pasted, or from the 1Password CLI), health over Redfish, and a guarded power off/on.
+// BMC card: health over Redfish and a guarded power off/on, with the BMC password the user pastes.
 // Everything that talks to the BMC runs in the local helper (ping-helper/).
 
-function opConfig(s) {
-  return { vault: s.opVault, account: s.opAccount, tag: s.opTag, fallback: s.opFallbackItem };
-}
-
-// BMC IPs from the ticket and NetBox, plus the hostnames/serials used to find the 1Password item.
+// BMC IPs from the ticket and NetBox, plus the serials used to spot the wrong BMC.
 function bmcTargets(brief, nb, ticketSerials = []) {
   const ips = [...bmcIPs(brief)];
   const names = [...brief.server_names];
@@ -20,27 +16,19 @@ function bmcTargets(brief, nb, ticketSerials = []) {
   return { ips: ips.slice(0, 4), names: [...new Set(names)].slice(0, 8), serials: [...new Set(serials)].slice(0, 8) };
 }
 
-async function bmcCall(action, settings, ip, who, login) {
-  const resp = await sendNative({ action, ip, names: who.names, serials: who.serials, op: opConfig(settings), ...(login ? { login } : {}) });
-  if (!resp.ok && /unknown action/i.test(resp.error || "")) {
-    return { ok: false, outdated: true, error: "The ping helper is out of date. Re-run the install command from Settings to add 1Password and BMC health." };
-  }
-  return resp;
-}
-
-const copyBmcPassword = (settings, ip, who) => bmcCall("bmc_copy_password", settings, ip, who);
-// login = { user, password } typed in the panel (when 1Password can't be used); otherwise 1Password is used.
-const readBmcHealth = (settings, ip, who, login) => bmcCall("bmc_health", settings, ip, who, login);
-
-// resetType: "GracefulShutdown" | "ForceOff" | "On". confirm must equal the IP (typed by the user).
-async function bmcPower(settings, ip, who, login, resetType, confirm) {
-  const resp = await sendNative({ action: "bmc_power", ip, names: who.names, serials: who.serials, op: opConfig(settings),
-    reset_type: resetType, confirm, ...(login ? { login } : {}) });
+async function bmcCall(message) {
+  const resp = await sendNative(message);
   if (!resp.ok && /unknown action/i.test(resp.error || "")) {
     return { ok: false, outdated: true, error: "The ping helper is out of date. Re-run the install command from Settings." };
   }
   return resp;
 }
+
+// login = { user, password } pasted in the panel.
+const readBmcHealth = (ip, login) => bmcCall({ action: "bmc_health", ip, login });
+
+// resetType: "GracefulShutdown" | "ForceOff" | "On". confirm must equal the IP (typed by the user).
+const bmcPower = (ip, login, resetType, confirm) => bmcCall({ action: "bmc_power", ip, login, reset_type: resetType, confirm });
 
 // Password box for Check health: copy the IP (if you haven't got the password yet), find it in 1Password,
 // copy the password and paste it here. Pasting starts the check. Kept in memory only, for re-checks.
@@ -124,14 +112,6 @@ function fmtWhen(iso) {
   return isNaN(t) ? String(iso || "") : t.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
-// One line naming the 1Password item, so a wrong match is easy to spot.
-function itemLine(item) {
-  if (!item) return null;
-  return h("div", { class: "bmc-item muted" },
-    `1Password: “${item.title}”${item.vault ? ` in ${item.vault}` : ""} (${item.match})`,
-    item.others > 0 && h("span", { class: "bmc-others" }, ` · ${item.others} other item${item.others === 1 ? "" : "s"} also match`));
-}
-
 function renderBmcHealth(x, who, ip, state, actions) {
   const box = h("div", { class: "bmc-health" });
   const s = x.system || {};
@@ -178,8 +158,8 @@ function renderBmcHealth(x, who, ip, state, actions) {
   return box;
 }
 
-// state: { who: {ips, names, serials}, copy: {ip: resp | "loading"}, health: {ip: resp | "loading"},
-//          showLogin: {ip: true}, creds: {ip: {user, password}}, mode: "paste" | "1password", user: "ADMIN",
+// state: { who: {ips, names, serials}, health: {ip: resp | "loading"},
+//          showLogin: {ip: true}, creds: {ip: {user, password}}, user: "ADMIN",
 //          reach: {ip: ping result}, power: {ip: {open, busy, result}}, verdict: brief.power_down }
 function renderBmc(box, state, actions) {
   if (!box) return;
@@ -201,8 +181,7 @@ function renderBmc(box, state, actions) {
 }
 
 function renderBmcOne(ip, state, actions) {
-  const { who, copy = {}, health = {}, showLogin = {}, mode = "paste", user = "ADMIN", reach = {} } = state;
-  const c = copy[ip];
+  const { who, health = {}, showLogin = {}, user = "ADMIN", reach = {} } = state;
   const x = health[ip];
   const r = reach[ip];
   const down = r && r.ok && !r.reachable; // pinged, no reply
@@ -212,7 +191,6 @@ function renderBmcOne(ip, state, actions) {
       r && h("span", { class: `dot ${!r.ok ? "err" : r.reachable ? "up" : "down"}`, title: r.ok ? (r.reachable ? "Answers ping" : "No ping reply") : r.error },
         h("span", { class: "sr-only" }, r.ok ? (r.reachable ? "answers ping" : "no ping reply") : "ping failed"))),
     h("button", { class: "mini", title: "Open the BMC web interface in a new tab", onclick: () => actions.openBmc(ip) }, "Open ", icon("external", 11)),
-    mode === "1password" && !down && h("button", { class: "mini", disabled: c === "loading" ? "" : null, title: "Find this BMC's login in 1Password and copy the password (cleared after 30 s)", onclick: () => actions.onCopy(ip) }, "🔑 Copy password"),
     h("button", { class: `mini${down ? " subtle" : ""}`, disabled: x === "loading" ? "" : null, title: "Read power state, failed parts and event log from the BMC (Redfish, read-only)", onclick: () => actions.onHealth(ip) },
       down ? "Try anyway" : x && x !== "loading" ? [icon("refresh", 11), " Health"] : "Check health")));
 
@@ -224,30 +202,18 @@ function renderBmcOne(ip, state, actions) {
       h("i", {}, "Ping again"), " above."));
   }
 
-  if (c === "loading") {
-    one.appendChild(h("div", { class: "muted" }, h("span", { class: "spinner" }), "Waiting for 1Password… approve the prompt if one appears."));
-  } else if (c?.ok) {
-    one.appendChild(h("div", { class: "bmc-copied" }, "✓ Password copied", c.username && [" for user ", copyChip(c.username)], ` · clipboard clears in ${c.clears_in} s`));
-    if (c.item) one.appendChild(itemLine(c.item));
-  } else if (c) {
-    one.appendChild(h("div", { class: "ping-msg bad" }, c.error));
-  }
-
   if (x === "loading") {
-    one.appendChild(h("div", { class: "muted" }, h("span", { class: "spinner" }), mode === "1password" ? "Reading health from the BMC… approve 1Password if asked." : "Reading health from the BMC…"));
+    one.appendChild(h("div", { class: "muted" }, h("span", { class: "spinner" }), "Reading health from the BMC…"));
   } else if (x?.ok) {
     one.appendChild(renderBmcHealth(x, who, ip, state, actions));
-    if (!c?.ok && x.item) one.appendChild(itemLine(x.item));
   } else if (x) {
     one.appendChild(h("div", { class: "ping-msg bad" }, x.error));
   }
-  if ((c?.outdated || x?.outdated || c?.notInstalled || x?.notInstalled) && actions.onSetup) {
+  if ((x?.outdated || x?.notInstalled) && actions.onSetup) {
     one.appendChild(h("button", { class: "mini", onclick: actions.onSetup }, "Open helper setup"));
   }
   if (showLogin[ip] && x !== "loading" && !down) {
     one.appendChild(loginForm(ip, user, (login) => actions.onHealth(ip, login)));
-  } else if (mode === "1password" && x !== "loading" && !x?.ok) {
-    one.appendChild(h("button", { class: "link bmc-type", onclick: () => actions.onShowLogin(ip) }, "Type a login instead"));
   }
   return one;
 }

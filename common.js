@@ -12,6 +12,15 @@ const LOCAL_PRESETS = {
   ollama: "http://localhost:11434/v1"
 };
 
+// The extension's developer: help, bugs and feature ideas. Linked at the bottom of the panel and of Settings.
+const DEVELOPER = { name: "Hadi Khodja", slack: "https://lambda.slack.com/team/U0AAMLCUCUA" };
+function fillDevContact() {
+  for (const el of document.querySelectorAll(".dev-contact")) {
+    const a = Object.assign(document.createElement("a"), { href: DEVELOPER.slack, target: "_blank", rel: "noopener", textContent: `${DEVELOPER.name} on Slack` });
+    el.replaceChildren("💬 Help, bugs or feature ideas? Message ", a);
+  }
+}
+
 const DEFAULTS = {
   provider: "anthropic",
   anthropicKey: "",
@@ -32,18 +41,15 @@ const DEFAULTS = {
   customInstructions: "", // extra free-form instructions added to every prompt
   pingAuto: true,      // ping the server's IP addresses automatically when a brief is shown
   bmcUrl: "https://{ip}", // how to open a BMC web UI; {ip} is replaced
-  opVault: "",         // 1Password vault holding BMC logins (blank = all vaults)
-  opAccount: "",       // 1Password account, only needed if you're signed in to several
-  opTag: "",           // only consider items with this tag, e.g. "bmc"
-  opFallbackItem: "",  // item to use when no item matches the BMC IP / hostname / serial
-  bmcLogin: "paste",   // BMC password for Check health: "paste" (user pastes it) or "1password" (CLI)
-  bmcUser: "ADMIN",
-  bmcHealthAuto: false, // read BMC health automatically (1Password CLI mode; may show a 1Password prompt)
+  bmcUser: "ADMIN",    // username for the BMC login (the password is pasted in the panel)
   netboxEnabled: true,
   netboxUrl: "https://netbox.prod.lambdalabs.cloud",
   netboxToken: "",     // optional; by default your NetBox browser login is used
   podcrawlerUrl: "https://podcrawler.aws.lambdalabs.cloud/#/racking",
-  podcrawlerStep: true // add a "rescan in Podcrawler" step to replacement tickets
+  podcrawlerStep: true, // add a "rescan in Podcrawler" step to replacement tickets
+  // Lambda parts catalog (Google Sheet shared by link): Lambda P/N ↔ manufacturer P/N ↔ description
+  catalogUrl: "https://docs.google.com/spreadsheets/d/1HkdgvcwHJ-HuDR90mmsVTNbuUqEtjRmYWpKF5hgCDAY/edit#gid=613788530",
+  slackIn: "browser"   // clicking a name opens the chat in Slack in Chrome ("browser") or just opens the desktop app ("app")
 };
 
 async function getSettings() {
