@@ -11,7 +11,7 @@
       <img src="icons/logo.svg" alt="" width="28" height="28">
       <div>
         <div class="title"><span class="brand-name">Lambda</span> DC Ops Assistant</div>
-        <div id="issueKey" class="muted">No issue</div>
+        <div id="issueKey" class="muted">No ticket open</div>
       </div>
     </div>
     <div class="actions">
@@ -23,6 +23,9 @@
   </header>
 
   <div id="status" class="status hidden" role="alert"></div>
+
+  <!-- Shown when the current tab isn't a Jira ticket. -->
+  <section id="empty" class="empty hidden"></section>
 
   <main id="result" class="hidden"></main>
 

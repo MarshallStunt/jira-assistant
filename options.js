@@ -57,9 +57,31 @@ async function ensureLocalPermission(baseUrl) {
   if (!ok) throw new Error(`Chrome permission for ${origin} was denied.`);
 }
 
+// Setup commands find the jira-assistant folder themselves, wherever it was unzipped (Desktop, Downloads…):
+// the browser records the folder of an unpacked extension, by extension ID, in each profile's preferences.
+function browserDataDir() {
+  const edge = /\bEdg\//.test(navigator.userAgent), brave = !!navigator.brave;
+  if (IS_WIN) return `$env:LOCALAPPDATA\\${edge ? "Microsoft\\Edge" : brave ? "BraveSoftware\\Brave-Browser" : "Google\\Chrome"}\\User Data`;
+  return `~/Library/Application\\ Support/${edge ? "Microsoft\\ Edge" : brave ? "BraveSoftware/Brave-Browser" : "Google/Chrome"}`;
+}
+
+// script: "setup" or "ping-helper/install" (.sh on Mac, .ps1 on Windows).
+function setupCommand(script) {
+  const id = chrome.runtime.id, dir = browserDataDir();
+  if (IS_WIN) {
+    return `$id='${id}'; $d = Get-ChildItem "${dir}\\*\\Secure Preferences","${dir}\\*\\Preferences" -ErrorAction SilentlyContinue | ` +
+      `% { if ((Get-Content -Raw $_.FullName) -match ('"' + $id + '":\\{.*?"path":"([^"]*)"')) { [regex]::Unescape($Matches[1]) } } | Select-Object -First 1; ` +
+      `if ($d) { powershell -ExecutionPolicy Bypass -File "$d\\${script.replace("/", "\\")}.ps1" $id } else { 'jira-assistant folder not found: see Settings' }`;
+  }
+  if (!IS_MAC) return `bash ~/Desktop/jira-assistant/${script}.sh ${id}`; // Linux: adjust the path
+  return `for f in ${dir}/*/Secure\\ Preferences ${dir}/*/Preferences; do d=$(plutil -extract extensions.settings.${id}.path raw -o - "$f" 2>/dev/null) && break; done; ` +
+    `bash "\${d:?jira-assistant folder not found}/${script}.sh" ${id}`;
+}
+
 async function load() {
   const s = await getSettings();
   models = { ...s.models };
+  $("provider").replaceChildren(); // load() runs again after loading a settings file
   for (const [id, p] of Object.entries(PROVIDERS)) {
     const opt = document.createElement("option");
     opt.value = id;
@@ -100,16 +122,10 @@ async function load() {
   $("catalogUrl").value = s.catalogUrl;
   $("pingAuto").checked = s.pingAuto;
   $("bmcUser").value = s.bmcUser;
-  // Windows: PowerShell + .ps1 scripts (the Desktop may be redirected to OneDrive, so ask Windows where it is).
-  const id = chrome.runtime.id;
-  const winDir = `$([Environment]::GetFolderPath('Desktop'))\\jira-assistant`;
-  $("installCmd").value = IS_WIN
-    ? `powershell -ExecutionPolicy Bypass -File "${winDir}\\ping-helper\\install.ps1" ${id}`
-    : `bash ~/Desktop/jira-assistant/ping-helper/install.sh ${id}`;
-  $("setupCmd").value = IS_WIN
-    ? `powershell -ExecutionPolicy Bypass -File "${winDir}\\setup.ps1" ${id}`
-    : `bash ~/Desktop/jira-assistant/setup.sh ${id}`;
+  $("installCmd").value = setupCommand("ping-helper/install");
+  $("setupCmd").value = setupCommand("setup");
   document.body.classList.add(IS_WIN ? "is-win" : "is-mac");
+  document.querySelectorAll(".ext-id").forEach((el) => (el.textContent = chrome.runtime.id));
   $("itRequest").value = IT_REQUEST;
   showProvider(s.provider);
 }
@@ -144,6 +160,26 @@ $("loadModels").addEventListener("click", async () => {
     showMsg(list.length ? `Connected — ${list.length} models available.` : "Connected, but no models were found.");
   } catch (e) {
     showMsg(String(e.message || e), true);
+  }
+});
+
+// A real one-line request with the key and model on the page (saved or not): checks the key, the model and the speed.
+$("testAi").addEventListener("click", async () => {
+  const s = { ...(await getSettings()), ...formSettings() };
+  const problem = missingConfig(s);
+  if (problem) return showMsg(problem.replace(" in Settings (⚙)", ""), true);
+  showMsg("Asking the AI…");
+  $("testAi").disabled = true;
+  const started = Date.now();
+  try {
+    if (s.provider === "local") await ensureLocalPermission(s.localBaseUrl);
+    const { text, model } = await generateText(s, { system: "You are a connection test. Answer in at most five words.", messages: [{ role: "user", content: "Say that the connection works." }], maxTokens: 50 });
+    const secs = ((Date.now() - started) / 1000).toFixed(1);
+    showMsg(`✓ ${PROVIDERS[s.provider].label} works: ${model} answered in ${secs} s ("${text.trim().slice(0, 60)}").${$("model").value ? "" : " Auto picked this model."} Click Save to keep these settings.`);
+  } catch (e) {
+    showMsg(`✕ ${String(e.message || e)}`, true);
+  } finally {
+    $("testAi").disabled = false;
   }
 });
 
@@ -195,6 +231,52 @@ $("save").addEventListener("click", async () => {
   await chrome.storage.local.remove(["apiKey", "model"]); // v1 settings, now migrated
   await chrome.storage.session.clear(); // drop cached analyses so new settings apply
   showMsg("Saved ✓");
+});
+
+// ---------- Backup & restore ----------
+// Settings as a JSON file. API keys and tokens are left out unless ticked, so a file can be shared with the team.
+
+const BACKUP_APP = "lambda-dc-ops-assistant";
+const SECRET_SETTINGS = ["anthropicKey", "openaiKey", "geminiKey", "localApiKey", "netboxToken"];
+
+function backupMsg(text, bad = false) {
+  $("backupMsg").textContent = text;
+  $("backupMsg").style.color = bad ? "var(--err)" : "";
+}
+
+$("exportSettings").addEventListener("click", async () => {
+  const s = await getSettings();
+  const withSecrets = $("exportSecrets").checked;
+  const settings = Object.fromEntries(Object.keys(DEFAULTS).filter((k) => withSecrets || !SECRET_SETTINGS.includes(k)).map((k) => [k, s[k]]));
+  const file = { app: BACKUP_APP, version: chrome.runtime.getManifest().version, savedAt: new Date().toISOString(), settings };
+  const url = URL.createObjectURL(new Blob([JSON.stringify(file, null, 2)], { type: "application/json" }));
+  const name = `dc-ops-assistant-settings-${new Date().toISOString().slice(0, 10)}.json`;
+  Object.assign(document.createElement("a"), { href: url, download: name }).click();
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+  backupMsg(withSecrets ? `Saved ${name} with your API keys: keep it private.` : `Saved ${name} (no API keys or tokens).`);
+});
+
+$("importSettings").addEventListener("click", () => $("importFile").click());
+$("importFile").addEventListener("change", async (e) => {
+  const file = e.target.files[0];
+  e.target.value = ""; // so the same file can be picked again
+  if (!file) return;
+  try {
+    let data;
+    try { data = JSON.parse(await file.text()); } catch { throw new Error("it isn't a settings file (not JSON)"); }
+    if (data?.app !== BACKUP_APP || typeof data.settings !== "object") throw new Error("it isn't a DC Ops Assistant settings file");
+    // Only known settings, each the same type as its default. Settings not in the file keep their current value.
+    const sameType = (a, b) => (Array.isArray(a) ? Array.isArray(b) : typeof a === typeof b && !Array.isArray(b) && b !== null);
+    const valid = Object.fromEntries(Object.entries(data.settings).filter(([k, v]) => k in DEFAULTS && sameType(DEFAULTS[k], v)));
+    if (!Object.keys(valid).length) throw new Error("there are no settings in it");
+    await chrome.storage.local.set(valid);
+    await chrome.storage.session.clear(); // drop cached analyses so the new settings apply
+    await load();
+    const keys = SECRET_SETTINGS.some((k) => k in valid) ? "including API keys" : "your API keys were kept";
+    backupMsg(`✓ Loaded ${Object.keys(valid).length} settings from ${file.name} (${keys}).`);
+  } catch (err) {
+    backupMsg(`Couldn't load ${file.name}: ${err.message}.`, true);
+  }
 });
 
 const IT_REQUEST = `Hi IT,

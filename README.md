@@ -13,6 +13,7 @@ A side panel for Datacenter Operations. Open a Jira ticket and get a one-glance 
 To update: pull the latest version, then click **reload** on the extension in `chrome://extensions`. The footer of the panel shows the version.
 
 ## The panel, top to bottom
+- **No ticket in this tab?** A start screen says to go to a Jira ticket tab, lists the tickets already open in your tabs (click one to go there), and reminds you to add an AI key if there isn't one.
 - **Header** (stays on screen): ticket key, **Re-analyze**, Settings, a progress line (✓ Ticket · ✓ AI brief · ✓ NetBox · ✕ Ping 1/2 up) and jump links (✅ Steps · 🔧 BMC · 🕘 History · 🗄️ NetBox).
 - **Ticket strip**: job type, status, priority; 👤 assignee and 📝 reporter (click a name to message them on Slack).
 - **⏻ Power-down verdict**: ✓ OK · i Not needed · ! Confirm first · ✕ Do NOT, with reason and evidence. Without explicit approval in the ticket it never says OK.
@@ -56,7 +57,7 @@ Settings → **Privacy**: before anything is sent to the AI, names, emails, phon
 
 ## Settings
 Four tabs, Save always at the bottom:
-- **Start**: getting started, AI provider, key, model, response speed.
+- **Start**: getting started, AI provider, key, model (**Test AI** sends a one-line question with your key and model and shows the answer and how long it took), response speed, and **back up / load settings** (a JSON file; API keys and the NetBox token only if you tick the box, so a file can be shared with the team).
 - **Servers & BMC**: ping helper, BMC username and web address, NetBox & Podcrawler, parts catalog link.
 - **Privacy**: privacy mode.
 - **Jira & AI**: self-hosted Jira hosts, server/location fields, people (Slack app or browser), team context and custom AI instructions.
@@ -65,7 +66,8 @@ Four tabs, Save always at the bottom:
 
 ### Helper (ping and BMC)
 Browsers can't ping or talk to BMCs, so a small Python helper does it through Chrome's native messaging. The setup command installs it; to install it on its own, use the command under Settings → Servers & BMC:
-- Mac/Linux: `bash ~/Desktop/jira-assistant/ping-helper/install.sh <extension-id>` (remove: `ping-helper/uninstall.sh`). Needs python3 (`xcode-select --install`).
+- The commands in Settings find the `jira-assistant` folder wherever it is (Desktop, Downloads…): they look up the folder Chrome loaded the extension from, by its ID. If that fails, run the script by hand: `bash <folder>/setup.sh <extension-id>` (Windows: `powershell -ExecutionPolicy Bypass -File "<folder>\setup.ps1" <extension-id>`); dragging the file into Terminal/PowerShell types its path.
+- Mac/Linux: `bash <folder>/ping-helper/install.sh <extension-id>` (remove: `ping-helper/uninstall.sh`). Needs python3 (`xcode-select --install`).
 - Windows (PowerShell): `powershell -ExecutionPolicy Bypass -File "<folder>\ping-helper\install.ps1" <extension-id>` (remove: `uninstall.ps1`). Needs Python 3 (`winget install Python.Python.3.13`).
 - Installed to `~/Library/Application Support/DCOpsPingHelper` or `%LOCALAPPDATA%\DCOpsPingHelper`, registered for Chrome, Edge, Brave and Chromium. **Test ping helper** in Settings shows its version and TLS library.
 - It prefers a Python with TLS 1.3; if a BMC refuses the connection it retries with `curl`.

@@ -32,7 +32,7 @@
             <input id="setupCmd" type="text" readonly class="mono">
             <button id="copySetup" type="button">Copy</button>
           </div>
-          <div class="hint">If you put the <code>jira-assistant</code> folder somewhere other than your Desktop, change the path in the command.</div>
+          <div class="hint">It finds the <code>jira-assistant</code> folder wherever you put it (Desktop, Downloads…). If it says the folder wasn't found, type <code class="os-mac">bash</code><code class="os-win">powershell -ExecutionPolicy Bypass -File</code> and a space, drag <code class="os-mac">setup.sh</code><code class="os-win">setup.ps1</code> from the folder into the window, add a space and the extension ID (<code class="ext-id"></code>), then press Enter.</div>
         </li>
         <li>
           <b>Paste your key below</b>, click <b>Load models</b>, then <b>Save</b>. Open any Jira ticket and click the Lambda icon in Chrome's toolbar.
@@ -96,8 +96,9 @@
       <div class="row">
         <select id="model"><option value="">Auto</option></select>
         <button id="loadModels" type="button">Load models</button>
+        <button id="testAi" type="button">Test AI</button>
       </div>
-      <div class="hint">Click “Load models” to test the connection and pick a model. “Auto” picks a fast, accurate one: the newest <b>Claude Sonnet</b>, a <b>GPT mini</b>, or <b>Gemini Flash</b>.</div>
+      <div class="hint"><b>Test AI</b> sends a one-line question with your key and model and shows the answer and how long it took. Click “Load models” to pick a model. “Auto” picks a fast, accurate one: the newest <b>Claude Sonnet</b>, a <b>GPT mini</b>, or <b>Gemini Flash</b>.</div>
     </div>
 
     <div class="field">
@@ -108,6 +109,18 @@
         <option value="thorough">Thorough — slowest, for tricky tickets</option>
       </select>
       <div class="hint">How long the AI may think before answering. Fast is accurate for almost all tickets; the power-down check always stays strict.</div>
+    </div>
+
+    <h2 data-tab="start">Back up or move your settings</h2>
+
+    <div class="field">
+      <div class="row">
+        <button id="exportSettings" type="button">💾 Save settings to a file</button>
+        <button id="importSettings" type="button">📂 Load settings from a file</button>
+        <input id="importFile" type="file" accept=".json,application/json" class="hidden">
+      </div>
+      <label><input id="exportSecrets" type="checkbox"> Include my API keys and NetBox token (keep that file private)</label>
+      <div id="backupMsg" class="hint">Keep a copy, move to a new computer, or share your team's setup (Jira fields, team notes, catalog link) without the keys. Saves what you last saved with <b>Save</b>. Loading a file changes only the settings in it.</div>
     </div>
 
     <h2 data-tab="privacy">Privacy</h2>
@@ -131,7 +144,7 @@
         <input id="installCmd" type="text" readonly class="mono">
         <button id="copyInstall" type="button">Copy</button>
       </div>
-      <div class="hint">If you moved the <code>jira-assistant</code> folder off your Desktop, adjust the path.
+      <div class="hint">Finds the <code>jira-assistant</code> folder wherever you put it.
         <span class="os-mac">Requires python3 (<code>xcode-select --install</code>). Run it in Terminal.</span>
         <span class="os-win">Requires Python 3 (<code>winget install Python.Python.3.13</code>). Run it in PowerShell.</span></div>
       <div class="row" style="margin-top:8px">

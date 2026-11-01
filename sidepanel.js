@@ -14,8 +14,9 @@ function parseIssueKey(url) {
     const u = new URL(url);
     const sel = u.searchParams.get("selectedIssue");
     if (sel && /^[A-Z][A-Z0-9_]+-\d+$/i.test(sel)) return sel.toUpperCase();
-    const m = u.pathname.match(/\/(?:browse|issues)\/([A-Z][A-Z0-9_]+-\d+)/i);
-    return m ? m[1].toUpperCase() : null;
+    // /browse/DC-1, /issues/DC-1, and service desk queue links (…/queues/custom/270/DC-32686): the key is a path part.
+    const key = u.pathname.split("/").reverse().find((part) => /^[A-Z][A-Z0-9_]+-\d+$/i.test(part));
+    return key ? key.toUpperCase() : null;
   } catch {
     return null;
   }
@@ -611,23 +612,60 @@ async function analyze(force = false) {
   }
 }
 
+// ---------- Start screen (no ticket in this tab) ----------
+// Says what to do, and lists the Jira tickets already open in other tabs so one click goes there.
+
+async function renderEmpty(tab, settings) {
+  const onJira = !!tab?.url && isJiraUrl(tab.url, settings);
+  const patterns = ["https://*.atlassian.net/*", ...settings.jiraHosts.flatMap((h) => [`https://${h}/*`, `http://${h}/*`])];
+  const tickets = (await chrome.tabs.query({ url: patterns }).catch(() => []))
+    .map((t) => ({ t, key: parseIssueKey(t.url) })).filter((x) => x.key && x.t.id !== tab?.id)
+    .filter((x, i, all) => all.findIndex((y) => y.key === x.key) === i).slice(0, 6);
+  const { lastJira } = await chrome.storage.local.get("lastJira");
+  const goTo = async (t) => {
+    await chrome.tabs.update(t.id, { active: true });
+    await chrome.windows.update(t.windowId, { focused: true });
+  };
+  const noKey = missingConfig(settings);
+  $("empty").replaceChildren(...[
+    h("div", { class: "empty-icon" }, "🎫"),
+    h("h2", {}, onJira ? "Open a ticket to start" : "Go to a Jira ticket tab to start"),
+    h("p", { class: "muted" }, onJira
+      ? "You're in Jira, but no ticket is open here. Click a ticket in your queue and its brief appears here."
+      : `This panel works on the Jira ticket in the current tab. Switch to a ticket tab (or open one) and ${settings.autoRun ? "the brief appears here automatically" : "click Analyze"}.`),
+    noKey && h("div", { class: "empty-setup" }, "⚙️ First, add your AI key: ",
+      h("button", { class: "link", onclick: () => chrome.runtime.openOptionsPage() }, "open Settings")),
+    tickets.length && h("div", { class: "empty-tabs" },
+      h("div", { class: "label" }, "Tickets open in your tabs"),
+      ...tickets.map(({ t, key }) => h("button", { class: "empty-tab", title: t.title, onclick: () => goTo(t) },
+        h("b", {}, key), h("span", { class: "muted" }, String(t.title || "").replace(/^\[[^\]]+\]\s*/, "").replace(/\s+-\s+Jira.*$/i, "")), "→"))),
+    !tickets.length && !onJira && lastJira && h("button", { class: "primary empty-open", onclick: () => openUrl(`${lastJira}/jira/your-work`) }, "Open Jira")
+  ].filter(Boolean));
+  $("empty").classList.remove("hidden");
+}
+
 async function refresh() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   const settings = await getSettings();
   const key = tab?.url && isJiraUrl(tab.url, settings) ? parseIssueKey(tab.url) : null;
 
-  if (key === current.key && tab?.id === current.tabId) return;
+  if (key === current.key && tab?.id === current.tabId) {
+    if (!key) renderEmpty(tab, settings); // other tabs may have changed
+    return;
+  }
   current.tabId = tab?.id ?? null;
   current.key = key;
   current.origin = tab?.url ? new URL(tab.url).origin : "";
   resetSteps();
 
-  $("issueKey").textContent = key || "Open a Jira issue";
+  $("issueKey").textContent = key || "No ticket open";
   $("analyzeBtn").disabled = !key;
   $("analyzeBtn").textContent = "Analyze";
   hideResult();
   setStatus("");
-  if (!key) return;
+  if (!key) return renderEmpty(tab, settings);
+  $("empty").classList.add("hidden");
+  chrome.storage.local.set({ lastJira: current.origin }); // for "Open Jira" on the start screen
 
   const cacheKey = `result:${key}`;
   const cached = (await chrome.storage.session.get(cacheKey))[cacheKey];
