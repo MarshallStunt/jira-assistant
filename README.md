@@ -10,7 +10,7 @@ A side panel for Datacenter Operations. Open a Jira ticket and get a one-glance 
 3. **Install the helper** (ping, BMC). Settings → *Getting started* → **Copy** the setup command and run it: on a Mac in **Terminal**, on Windows in **PowerShell**. It asks before installing anything.
 4. **Paste the key**, click **Load models**, then **Save**. Open any Jira ticket.
 
-**Updates:** the panel checks the private GitHub repo every few hours with your GitHub login in Chrome (you need access to the repo) and shows a 🆕 banner when there's a new version. **⬇️ Update now** downloads it with your GitHub login, the helper puts it in your jira-assistant folder (`git pull` if it's a git copy, otherwise the new files over the old ones) and updates itself, and the extension reloads. *Update by hand* has a command that does the same from Terminal/PowerShell (or a ZIP link). Settings → Start → **Check for updates** checks right away. Needs helper 1.6.0 or later: older helpers update by hand once. The footer of the panel shows the version.
+**Updates:** Chrome checks the private GitHub repo every 2 hours with your GitHub login (you need access to the repo). A new version shows a red **NEW** badge on the toolbar icon, one notification (click it to open Settings → Updates), and a 🆕 banner at the top of the panel; **Later** hides the banner and badge until the next version. **⬇️ Update now** downloads it with your GitHub login, the helper puts it in your jira-assistant folder (`git pull` if it's a git copy, otherwise the new files over the old ones) and updates itself, and the extension reloads. *Update by hand* has a command that does the same from Terminal/PowerShell (or a ZIP link). Settings → Start → **Check for updates** checks right away. Needs helper 1.6.0 or later: older helpers update by hand once. The footer of the panel shows the version.
 
 ## The panel, top to bottom
 - **🆕 Update banner** when GitHub has a newer version (see *Updates* above).
@@ -104,7 +104,7 @@ Browsers can't ping or talk to BMCs, so a small Python helper does it through Ch
 | File | What it does |
 |---|---|
 | `manifest.json` | Extension manifest (permissions, version) |
-| `background.js` | Service worker: opens the side panel, request headers, clears removed settings |
+| `background.js` | Service worker: opens the side panel, request headers, clears removed settings, new-version check (badge, notification) |
 | `sidepanel.html` / `sidepanel.js` | The panel: reads the ticket, runs the AI and all lookups; update banner, start screen |
 | `render.js` | Draws the brief, ping and NetBox cards |
 | `analysis.js` | Brief schema, AI instructions, Jira comment |

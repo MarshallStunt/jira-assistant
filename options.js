@@ -272,6 +272,7 @@ async function showUpdate(force) {
   if (force) $("updateStatus").textContent = "Checking GitHub…";
   const u = await checkForUpdate(force);
   if (run !== updateRun) return; // a newer check is running: show only its result
+  showUpdateBadge(u);
   $("updateStatus").textContent = !u.ok ? `You have ${u.current}. Couldn't check: ${u.error}.`
     : u.available ? `🆕 Version ${u.latest} is available (you have ${u.current}).` : `✓ You have the latest version (${u.current}).`;
   $("updateStatus").style.color = u.ok ? "" : "var(--err)";
@@ -350,6 +351,8 @@ function setupTabs() {
   }));
   show(TABS.some(([id]) => id === saved) ? saved : "start");
 }
+// From the new-version notification (options.html#updates): open the Start tab at Updates.
+if (location.hash === "#updates") try { localStorage.setItem("settingsTab", "start"); } catch {}
 setupTabs();
 fillDevContact();
 
@@ -389,4 +392,5 @@ $("testNetbox").addEventListener("click", async () => {
   }
 });
 
-load();
+// The heading's id differs from #updates, so the browser doesn't jump there before the tabs hide other sections.
+load().then(() => location.hash === "#updates" && $("updatesHead").scrollIntoView({ block: "start" }));

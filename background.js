@@ -1,6 +1,9 @@
-// Service worker: opens the side panel from the toolbar icon, clears settings of removed features, and makes
+// Service worker: opens the side panel from the toolbar icon, clears settings of removed features, checks for a
+// new version (toolbar badge + one notification per version), and makes
 // every request the extension sends (Jira, NetBox, the AI APIs, local models) look like a plain API client
 // instead of a browser: drop the Origin/Referer/Sec-* headers Chrome adds and replace the browser User-Agent.
+importScripts("common.js"); // the update check and badge are shared with the panel and Settings
+
 const PLAIN_CLIENT_RULE_ID = 1;
 const BROWSER_HEADERS = ["origin", "referer", "sec-fetch-site", "sec-fetch-mode", "sec-fetch-dest", "sec-ch-ua", "sec-ch-ua-mobile", "sec-ch-ua-platform"];
 
@@ -39,6 +42,7 @@ function enablePanel() {
 
 chrome.runtime.onInstalled.addListener((details) => {
   enablePanel();
+  newVersionCheck().catch((e) => console.warn("update check", e)); // after an update this clears the badge
   if (details.reason === "install") chrome.runtime.openOptionsPage();
   // Slack direct-message lookup was removed in 1.7.2: forget its saved token, address and member list.
   // 1Password CLI logins were removed in 1.8.0: forget those settings too.
@@ -49,4 +53,36 @@ chrome.runtime.onInstalled.addListener((details) => {
   });
 });
 
-chrome.runtime.onStartup.addListener(enablePanel);
+chrome.runtime.onStartup.addListener(() => {
+  enablePanel();
+  newVersionCheck();
+});
+
+// ---------- New version alert ----------
+// Every 2 hours while Chrome runs (and at startup / after an update): a "NEW" badge on the toolbar icon while a
+// newer version is waiting, and one notification per new version. Clicking it opens Settings at Updates.
+
+const UPDATE_ALARM = "updateCheck";
+
+async function newVersionCheck() {
+  const u = await checkForUpdate();
+  await showUpdateBadge(u);
+  if (!u.available) return;
+  const { updateNotified } = await chrome.storage.local.get("updateNotified");
+  if (updateNotified === u.latest) return;
+  await chrome.storage.local.set({ updateNotified: u.latest });
+  chrome.notifications.create("update", {
+    type: "basic", iconUrl: "icons/icon128.png", priority: 1,
+    title: `DC Ops Assistant ${u.latest} is available`,
+    message: `You have ${u.current}. Click to update in one click.`
+  });
+}
+
+// Created once: re-creating it each time the worker wakes would keep pushing the next check back.
+chrome.alarms.get(UPDATE_ALARM).then((a) => a || chrome.alarms.create(UPDATE_ALARM, { delayInMinutes: 1, periodInMinutes: 120 }));
+chrome.alarms.onAlarm.addListener((a) => a.name === UPDATE_ALARM && newVersionCheck().catch((e) => console.warn("update check", e)));
+chrome.notifications.onClicked.addListener((id) => {
+  if (id !== "update") return;
+  chrome.notifications.clear(id);
+  chrome.tabs.create({ url: chrome.runtime.getURL("options.html#updates") });
+});

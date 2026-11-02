@@ -110,9 +110,9 @@ function folderCommand(mac, win) {
 
 // ---------- Updates ----------
 // The latest version is read from the private GitHub repo with the user's own GitHub login in Chrome, so only
-// people who can see the repo get it. Checked at most every 6 hours.
+// people who can see the repo get it. Checked at most every 2 hours (in the background, and when the panel opens).
 const UPDATE_REPO = "MarshallStunt/jira-assistant";
-const UPDATE_EVERY_MS = 6 * 60 * 60 * 1000;
+const UPDATE_EVERY_MS = 2 * 60 * 60 * 1000;
 const UPDATE_LINKS = {
   changes: `https://github.com/${UPDATE_REPO}/commits/main`,
   zip: `https://github.com/${UPDATE_REPO}/archive/refs/heads/main.zip`
@@ -144,6 +144,15 @@ async function checkForUpdate(force = false) {
     await chrome.storage.local.set({ updateCheck: r });
   }
   return { ...r, current, available: !!r.ok && isNewerVersion(r.latest, current) };
+}
+
+// Red "NEW" badge on the toolbar icon while a newer version is waiting (not after "Later" for that version).
+async function showUpdateBadge(u) {
+  const { updateLater } = await chrome.storage.local.get("updateLater");
+  const on = !!u.available && updateLater !== u.latest;
+  await chrome.action.setBadgeText({ text: on ? "NEW" : "" });
+  if (on) await chrome.action.setBadgeBackgroundColor({ color: "#d93025" });
+  await chrome.action.setTitle({ title: on ? `Lambda DC Ops Assistant: version ${u.latest} is available` : "Lambda DC Ops Assistant" });
 }
 
 // One click: download the new version with the GitHub login, then the helper puts it in the extension's folder

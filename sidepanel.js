@@ -560,6 +560,7 @@ async function setupPing(key, brief, ticketIps, extraTargets = []) {
 
 async function showUpdateBar() {
   const u = await checkForUpdate();
+  showUpdateBadge(u);
   const { updateLater } = await chrome.storage.local.get("updateLater");
   if (!u.available || updateLater === u.latest) return $("updateBar").classList.add("hidden");
   const steps = updateSteps();
@@ -572,6 +573,7 @@ async function showUpdateBar() {
       h("button", { class: "mini subtle", onclick: async () => {
         await chrome.storage.local.set({ updateLater: u.latest });
         $("updateBar").classList.add("hidden");
+        showUpdateBadge(u);
       } }, "Later")),
     steps);
   $("updateBar").classList.remove("hidden");

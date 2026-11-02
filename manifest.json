@@ -1,11 +1,13 @@
 {
   "manifest_version": 3,
   "name": "Lambda DC Ops Assistant",
-  "version": "1.21.1",
+  "version": "1.22.0",
   "description": "Lambda Datacenter Ops brief for Jira tickets: power-down safety, server & location, NetBox, BMC health, parts catalog & spare stock, Slack — with Claude, OpenAI, Gemini or a local model.",
   "permissions": [
     "sidePanel",
     "storage",
+    "alarms",
+    "notifications",
     "scripting",
     "tabs",
     "nativeMessaging",
