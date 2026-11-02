@@ -13,13 +13,14 @@ A side panel for Datacenter Operations. Open a Jira ticket and get a one-glance 
 **Updates:** the panel checks the private GitHub repo every few hours with your GitHub login in Chrome (you need access to the repo) and shows a 🆕 banner when there's a new version, with a copyable `git pull` command (or a ZIP download) and a **Reload extension** button. Settings → Start → **Check for updates** checks right away. The footer of the panel shows the version.
 
 ## The panel, top to bottom
+- **🆕 Update banner** when GitHub has a newer version (see *Updates* above).
 - **No ticket in this tab?** A start screen says to go to a Jira ticket tab, lists the tickets already open in your tabs (click one to go there), and reminds you to add an AI key if there isn't one.
 - **Header** (stays on screen): ticket key, **Re-analyze**, Settings, a progress line (✓ Ticket · ✓ AI brief · ✓ NetBox · ✕ Ping 1/2 up) and jump links (✅ Steps · 🔧 BMC · 🕘 History · 🗄️ NetBox).
 - **Ticket strip**: job type, status, priority; 👤 assignee and 📝 reporter (click a name to message them on Slack).
 - **⏻ Power-down verdict**: ✓ OK · i Not needed · ! Confirm first · ✕ Do NOT, with reason and evidence. Without explicit approval in the ticket it never says OK.
 - **📋 Request** and **⚠️ Cautions**.
 - **🖥️ Server & 📍 Location**: hostnames (click to copy), site, row/rack/RU, any ticket-vs-NetBox mismatch, and **📡 Reachability** (ping of the ticket's and NetBox's IPs, with the network you go out on, e.g. `via utun4 (VPN)`).
-- **🔧 BMC**: health and power control (below).
+- **🔧 BMC**: health, 🖥️ remote console and power control (below).
 - **✅ Next steps** checklist (risky steps in red; a Podcrawler rescan step is added for replacements) and **🧰 Parts & tools** with the parts catalog and stock (below).
 - **🕘 History**, **🗄️ NetBox** and **❓ To confirm** (collapsed; they remember if you open them).
 - **📋 Copy as Jira comment** at the end, and the **💬 Ask the AI** box docked at the bottom.
@@ -58,7 +59,7 @@ Settings → **Privacy**: before anything is sent to the AI, names, emails, phon
 
 ## Settings
 Four tabs, Save always at the bottom:
-- **Start**: getting started, AI provider, key, model (**Test AI** sends a one-line question with your key and model and shows the answer and how long it took), response speed, and **back up / load settings** (a JSON file; API keys and the NetBox token only if you tick the box, so a file can be shared with the team).
+- **Start**: getting started, **updates**, AI provider, key, model (**Test AI** sends a one-line question with your key and model and shows the answer and how long it took), response speed, and **back up / load settings** (a JSON file; API keys and the NetBox token only if you tick the box, so a file can be shared with the team).
 - **Servers & BMC**: ping helper, BMC username and web address, NetBox & Podcrawler, parts catalog link.
 - **Privacy**: privacy mode.
 - **Jira & AI**: self-hosted Jira hosts, server/location fields, people (Slack app or browser), team context and custom AI instructions.
@@ -94,7 +95,7 @@ Browsers can't ping or talk to BMCs, so a small Python helper does it through Ch
 ## Data and security
 - With a cloud provider, the ticket (and for chat questions, matching catalog rows and stock) goes to that provider; with a local model nothing leaves your computer. Privacy mode hides sensitive values either way.
 - BMC passwords are only pasted, kept in memory until the panel closes, and sent only to the BMC (private IPs, HTTPS) through the local helper. Never saved, never sent to the AI.
-- NetBox, the catalog and Slack are only read. The one write the extension can make is the confirmed BMC power action.
+- NetBox, the catalog and Slack are only read. The update check only reads the version number from the GitHub repo. The one write the extension can make is the confirmed BMC power action.
 - API keys are stored in Chrome's local extension storage.
 - ⚠️ Some NetBox journal entries contain BMC passwords in plain text ("PWD - …"). The extension strips those lines, but they should be removed from NetBox.
 
@@ -103,21 +104,21 @@ Browsers can't ping or talk to BMCs, so a small Python helper does it through Ch
 |---|---|
 | `manifest.json` | Extension manifest (permissions, version) |
 | `background.js` | Service worker: opens the side panel, request headers, clears removed settings |
-| `sidepanel.html` / `sidepanel.js` | The panel: reads the ticket, runs the AI and all lookups |
+| `sidepanel.html` / `sidepanel.js` | The panel: reads the ticket, runs the AI and all lookups; update banner, start screen |
 | `render.js` | Draws the brief, ping and NetBox cards |
 | `analysis.js` | Brief schema, AI instructions, Jira comment |
-| `common.js` | Settings, AI providers (Claude, OpenAI, Gemini, local), streaming |
+| `common.js` | Settings, developer contact, folder commands (setup, update), update check, AI providers (Claude, OpenAI, Gemini, local), streaming |
 | `chat.js` | Ask-the-AI box, part search planning |
 | `catalog.js` | Parts catalog: load, match, search, catalog rows for the AI, Parts card |
 | `netbox.js` | NetBox lookup, journal, modules, spare stock |
-| `bmc.js` | BMC card: health, power panel |
+| `bmc.js` | BMC card: health, remote console, power panel |
 | `ping.js` | Ping targets and the native-messaging call to the helper |
 | `slack.js` | Opens a Slack DM in your Slack tab |
 | `privacy.js` | Privacy mode placeholders |
 | `icons.js`, `icons/` | Line icons and the λ logo |
-| `options.html` / `options.js` | Settings page |
+| `options.html` / `options.js` | Settings page (tabs, Test AI, backup & restore, updates) |
 | `styles.css` | Styles for both pages (light and dark) |
-| `ping-helper/` | Python helper (ping, Redfish) and its Mac/Windows installers |
+| `ping-helper/` | Python helper (ping; BMC health, console link and power over Redfish) and its Mac/Windows installers |
 | `setup.sh` / `setup.ps1` | One-step setup for Mac / Windows |
 
 `icons/logo.svg` is a λ mark in Lambda violet; to use the official logo, replace it and `icons/icon16/32/48/128.png` with artwork of the same sizes.

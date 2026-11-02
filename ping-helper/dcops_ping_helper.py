@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-DC Ops ping helper — Chrome native messaging host for the DC Ops Jira Assistant extension.
+Lambda DC Ops Assistant helper (ping and BMC) — Chrome native messaging host for the extension.
 
 Chrome extensions cannot send ICMP pings, so the extension asks this helper to:
   - resolve each address (DNS),

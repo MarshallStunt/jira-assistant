@@ -1,4 +1,4 @@
-# Installs the DC Ops ping helper on Windows so the Chrome extension can ping servers and talk to BMCs.
+# Installs the Lambda DC Ops Assistant helper on Windows so the Chrome extension can ping servers and talk to BMCs.
 # Usage (PowerShell):  powershell -ExecutionPolicy Bypass -File install.ps1 <extension-id>
 # The exact command (with your extension ID) is shown in the extension's Settings page.
 param([string]$ExtensionId = "")
@@ -46,7 +46,7 @@ Set-Content -Path $Run -Encoding ASCII -Value "@echo off`r`n`"$($Py.Path)`" `"%~
 $Manifest = Join-Path $InstallDir "$HostName.json"
 $json = @{
   name = $HostName
-  description = "DC Ops ping helper"
+  description = "Lambda DC Ops Assistant helper (ping, BMC)"
   path = $Run
   type = "stdio"
   allowed_origins = @("chrome-extension://$ExtensionId/")

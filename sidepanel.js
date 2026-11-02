@@ -1,7 +1,7 @@
 // Side panel: detects the open Jira issue, reads it (fields, comments, history), asks the selected AI provider
 // for a DC Ops brief and renders it, then runs the lookups around it: NetBox, ping, BMC, parts catalog & stock.
 // Sections: Jira · AI · progress line & jump links · status, toast, people · NetBox · parts · BMC · reachability ·
-// analyze & tab events.
+// update banner · start screen (no ticket) · analyze & tab events.
 
 const $ = (id) => document.getElementById(id);
 let current = { tabId: null, key: null, running: false };
@@ -408,7 +408,7 @@ async function setupParts(key, entry, nb) {
   await load(false);
 }
 
-// ---------- BMC (pasted login, Redfish health and power) ----------
+// ---------- BMC (pasted login: Redfish health, remote console, power) ----------
 
 // The BMC card of the ticket on screen, so ping results can update it when they arrive.
 let bmcView = null;
@@ -555,6 +555,60 @@ async function setupPing(key, brief, ticketIps, extraTargets = []) {
   else doPing();
 }
 
+// ---------- Update banner ----------
+// Shown when GitHub has a newer version (checked every few hours). "Later" hides it until the next version.
+
+async function showUpdateBar() {
+  const u = await checkForUpdate();
+  const { updateLater } = await chrome.storage.local.get("updateLater");
+  if (!u.available || updateLater === u.latest) return $("updateBar").classList.add("hidden");
+  const steps = updateSteps();
+  steps.classList.add("hidden");
+  $("updateBar").replaceChildren(
+    h("div", { class: "update-head" },
+      h("span", {}, h("b", {}, `🆕 Version ${u.latest} is available`), h("span", { class: "muted" }, ` (you have ${u.current})`)),
+      h("button", { class: "mini", onclick: () => steps.classList.toggle("hidden") }, "How to update"),
+      h("a", { href: UPDATE_LINKS.changes, target: "_blank", rel: "noopener" }, "What's new"),
+      h("button", { class: "mini subtle", onclick: async () => {
+        await chrome.storage.local.set({ updateLater: u.latest });
+        $("updateBar").classList.add("hidden");
+      } }, "Later")),
+    steps);
+  $("updateBar").classList.remove("hidden");
+}
+
+// ---------- Start screen (no ticket in this tab) ----------
+// Says what to do, and lists the Jira tickets already open in other tabs so one click goes there.
+
+async function renderEmpty(tab, settings) {
+  const onJira = !!tab?.url && isJiraUrl(tab.url, settings);
+  const patterns = ["https://*.atlassian.net/*", ...settings.jiraHosts.flatMap((h) => [`https://${h}/*`, `http://${h}/*`])];
+  const tickets = (await chrome.tabs.query({ url: patterns }).catch(() => []))
+    .map((t) => ({ t, key: parseIssueKey(t.url) })).filter((x) => x.key && x.t.id !== tab?.id)
+    .filter((x, i, all) => all.findIndex((y) => y.key === x.key) === i).slice(0, 6);
+  const { lastJira } = await chrome.storage.local.get("lastJira");
+  const goTo = async (t) => {
+    await chrome.tabs.update(t.id, { active: true });
+    await chrome.windows.update(t.windowId, { focused: true });
+  };
+  const noKey = missingConfig(settings);
+  $("empty").replaceChildren(...[
+    h("div", { class: "empty-icon" }, "🎫"),
+    h("h2", {}, onJira ? "Open a ticket to start" : "Go to a Jira ticket tab to start"),
+    h("p", { class: "muted" }, onJira
+      ? "You're in Jira, but no ticket is open here. Click a ticket in your queue and its brief appears here."
+      : `This panel works on the Jira ticket in the current tab. Switch to a ticket tab (or open one) and ${settings.autoRun ? "the brief appears here automatically" : "click Analyze"}.`),
+    noKey && h("div", { class: "empty-setup" }, "⚙️ First, add your AI key: ",
+      h("button", { class: "link", onclick: () => chrome.runtime.openOptionsPage() }, "open Settings")),
+    tickets.length && h("div", { class: "empty-tabs" },
+      h("div", { class: "label" }, "Tickets open in your tabs"),
+      ...tickets.map(({ t, key }) => h("button", { class: "empty-tab", title: t.title, onclick: () => goTo(t) },
+        h("b", {}, key), h("span", { class: "muted" }, String(t.title || "").replace(/^\[[^\]]+\]\s*/, "").replace(/\s+-\s+Jira.*$/i, "")), "→"))),
+    !tickets.length && !onJira && lastJira && h("button", { class: "primary empty-open", onclick: () => openUrl(`${lastJira}/jira/your-work`) }, "Open Jira")
+  ].filter(Boolean));
+  $("empty").classList.remove("hidden");
+}
+
 // ---------- Analyze & tab events ----------
 
 async function analyze(force = false) {
@@ -633,60 +687,6 @@ async function analyze(force = false) {
     current.running = false;
     $("analyzeBtn").disabled = !current.key;
   }
-}
-
-// ---------- Update banner ----------
-// Shown when GitHub has a newer version (checked every few hours). "Later" hides it until the next version.
-
-async function showUpdateBar() {
-  const u = await checkForUpdate();
-  const { updateLater } = await chrome.storage.local.get("updateLater");
-  if (!u.available || updateLater === u.latest) return $("updateBar").classList.add("hidden");
-  const steps = updateSteps();
-  steps.classList.add("hidden");
-  $("updateBar").replaceChildren(
-    h("div", { class: "update-head" },
-      h("span", {}, h("b", {}, `🆕 Version ${u.latest} is available`), h("span", { class: "muted" }, ` (you have ${u.current})`)),
-      h("button", { class: "mini", onclick: () => steps.classList.toggle("hidden") }, "How to update"),
-      h("a", { href: UPDATE_LINKS.changes, target: "_blank", rel: "noopener" }, "What's new"),
-      h("button", { class: "mini subtle", onclick: async () => {
-        await chrome.storage.local.set({ updateLater: u.latest });
-        $("updateBar").classList.add("hidden");
-      } }, "Later")),
-    steps);
-  $("updateBar").classList.remove("hidden");
-}
-
-// ---------- Start screen (no ticket in this tab) ----------
-// Says what to do, and lists the Jira tickets already open in other tabs so one click goes there.
-
-async function renderEmpty(tab, settings) {
-  const onJira = !!tab?.url && isJiraUrl(tab.url, settings);
-  const patterns = ["https://*.atlassian.net/*", ...settings.jiraHosts.flatMap((h) => [`https://${h}/*`, `http://${h}/*`])];
-  const tickets = (await chrome.tabs.query({ url: patterns }).catch(() => []))
-    .map((t) => ({ t, key: parseIssueKey(t.url) })).filter((x) => x.key && x.t.id !== tab?.id)
-    .filter((x, i, all) => all.findIndex((y) => y.key === x.key) === i).slice(0, 6);
-  const { lastJira } = await chrome.storage.local.get("lastJira");
-  const goTo = async (t) => {
-    await chrome.tabs.update(t.id, { active: true });
-    await chrome.windows.update(t.windowId, { focused: true });
-  };
-  const noKey = missingConfig(settings);
-  $("empty").replaceChildren(...[
-    h("div", { class: "empty-icon" }, "🎫"),
-    h("h2", {}, onJira ? "Open a ticket to start" : "Go to a Jira ticket tab to start"),
-    h("p", { class: "muted" }, onJira
-      ? "You're in Jira, but no ticket is open here. Click a ticket in your queue and its brief appears here."
-      : `This panel works on the Jira ticket in the current tab. Switch to a ticket tab (or open one) and ${settings.autoRun ? "the brief appears here automatically" : "click Analyze"}.`),
-    noKey && h("div", { class: "empty-setup" }, "⚙️ First, add your AI key: ",
-      h("button", { class: "link", onclick: () => chrome.runtime.openOptionsPage() }, "open Settings")),
-    tickets.length && h("div", { class: "empty-tabs" },
-      h("div", { class: "label" }, "Tickets open in your tabs"),
-      ...tickets.map(({ t, key }) => h("button", { class: "empty-tab", title: t.title, onclick: () => goTo(t) },
-        h("b", {}, key), h("span", { class: "muted" }, String(t.title || "").replace(/^\[[^\]]+\]\s*/, "").replace(/\s+-\s+Jira.*$/i, "")), "→"))),
-    !tickets.length && !onJira && lastJira && h("button", { class: "primary empty-open", onclick: () => openUrl(`${lastJira}/jira/your-work`) }, "Open Jira")
-  ].filter(Boolean));
-  $("empty").classList.remove("hidden");
 }
 
 async function refresh() {

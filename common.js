@@ -1,4 +1,6 @@
-// Shared settings + AI provider adapters (used by side panel and options page).
+// Shared by the side panel and the Settings page: settings and their defaults, platform keys, the developer
+// contact, commands that run in the extension's folder, the update check, and the AI provider adapters
+// (Claude, OpenAI, Gemini, local) with streaming.
 
 const PROVIDERS = {
   anthropic: { label: "Anthropic (Claude)" },
@@ -12,6 +14,69 @@ const LOCAL_PRESETS = {
   ollama: "http://localhost:11434/v1"
 };
 
+const DEFAULTS = {
+  provider: "anthropic",
+  anthropicKey: "",
+  openaiKey: "",
+  geminiKey: "",
+  localBaseUrl: LOCAL_PRESETS.lmstudio,
+  localApiKey: "",
+  models: {},          // { anthropic: "...", openai: "...", gemini: "...", local: "..." }
+  jiraHosts: [],       // extra self-hosted Jira hostnames, e.g. ["jira.example.com"]
+  speed: "fast",       // fast | balanced | thorough: how long the model may think before answering
+  privacyMode: false,  // swap sensitive values for placeholders before sending anything to the AI
+  privacyHide: { people: true, contact: true, network: true, serials: true },
+  privacyWords: "",    // extra words to hide (customer names, project codes), one per line
+  autoRun: true,       // analyze automatically when a Jira issue opens
+  serverField: "",     // optional Jira field name/id holding the server name
+  locationField: "",   // optional Jira field name/id holding the location
+  teamContext: "",     // runbooks / team notes appended to the prompt
+  customInstructions: "", // extra free-form instructions added to every prompt
+  pingAuto: true,      // ping the server's IP addresses automatically when a brief is shown
+  bmcUrl: "https://{ip}", // how to open a BMC web UI; {ip} is replaced
+  bmcUser: "ADMIN",    // username for the BMC login (the password is pasted in the panel)
+  netboxEnabled: true,
+  netboxUrl: "https://netbox.prod.lambdalabs.cloud",
+  netboxToken: "",     // optional; by default your NetBox browser login is used
+  podcrawlerUrl: "https://podcrawler.aws.lambdalabs.cloud/#/racking",
+  podcrawlerStep: true, // add a "rescan in Podcrawler" step to replacement tickets
+  // Lambda parts catalog (Google Sheet shared by link): Lambda P/N ↔ manufacturer P/N ↔ description
+  catalogUrl: "https://docs.google.com/spreadsheets/d/1HkdgvcwHJ-HuDR90mmsVTNbuUqEtjRmYWpKF5hgCDAY/edit#gid=613788530",
+  slackIn: "browser"   // clicking a name opens the chat in Slack in Chrome ("browser") or just opens the desktop app ("app")
+};
+
+async function getSettings() {
+  const stored = await chrome.storage.local.get([...Object.keys(DEFAULTS), "apiKey", "model"]);
+  const s = { ...DEFAULTS, ...stored, models: { ...(stored.models || {}) }, privacyHide: { ...DEFAULTS.privacyHide, ...(stored.privacyHide || {}) } };
+  // Migrate settings from v1 (Anthropic only).
+  if (!s.anthropicKey && stored.apiKey) s.anthropicKey = stored.apiKey;
+  if (!s.models.anthropic && stored.model) s.models.anthropic = stored.model;
+  return s;
+}
+
+function providerLabel(id) {
+  return PROVIDERS[id]?.label || id;
+}
+
+// Returns a human-readable problem if the provider isn't configured, else "".
+function missingConfig(s) {
+  switch (s.provider) {
+    case "anthropic": return s.anthropicKey ? "" : "Add your Anthropic API key in Settings (⚙). No key yet? Settings → Getting started shows how to get one from IT.";
+    case "openai":    return s.openaiKey ? "" : "Add your OpenAI API key in Settings (⚙). No key yet? Settings → Getting started shows how to get one from IT.";
+    case "gemini":    return s.geminiKey ? "" : "Add your Gemini API key in Settings (⚙). No key yet? Settings → Getting started shows how to get one from IT.";
+    case "local":     return s.localBaseUrl ? "" : "Set your local server URL in Settings (⚙).";
+    default:          return "Choose an AI provider in Settings (⚙).";
+  }
+}
+
+// Keyboard shortcuts as shown in hints (Mac vs Windows/Linux).
+const IS_MAC = /mac/i.test(navigator.userAgentData?.platform || navigator.platform || "");
+const IS_WIN = /win/i.test(navigator.userAgentData?.platform || navigator.platform || "");
+const KEYS = IS_MAC
+  ? { paste: "⌘V", quickAccess: "⌘⇧Space", slackSearch: "⌘K" }
+  : { paste: "Ctrl+V", quickAccess: "Ctrl+Shift+Space", slackSearch: "Ctrl+K" };
+
+// ---------- Developer contact ----------
 // The extension's developer: help, bugs and feature ideas. Linked at the bottom of the panel and of Settings.
 const DEVELOPER = { name: "Hadi Khodja", slack: "https://lambda.slack.com/team/U0AAMLCUCUA" };
 function fillDevContact() {
@@ -96,68 +161,6 @@ function updateSteps() {
     el("li", {}, reload, " then close and reopen this panel."),
     el("li", { className: "muted" }, "If ping or BMC then says the helper is out of date, run the setup command again (Settings → Start)."));
 }
-
-const DEFAULTS = {
-  provider: "anthropic",
-  anthropicKey: "",
-  openaiKey: "",
-  geminiKey: "",
-  localBaseUrl: LOCAL_PRESETS.lmstudio,
-  localApiKey: "",
-  models: {},          // { anthropic: "...", openai: "...", gemini: "...", local: "..." }
-  jiraHosts: [],       // extra self-hosted Jira hostnames, e.g. ["jira.example.com"]
-  speed: "fast",       // fast | balanced | thorough: how long the model may think before answering
-  privacyMode: false,  // swap sensitive values for placeholders before sending anything to the AI
-  privacyHide: { people: true, contact: true, network: true, serials: true },
-  privacyWords: "",    // extra words to hide (customer names, project codes), one per line
-  autoRun: true,       // analyze automatically when a Jira issue opens
-  serverField: "",     // optional Jira field name/id holding the server name
-  locationField: "",   // optional Jira field name/id holding the location
-  teamContext: "",     // runbooks / team notes appended to the prompt
-  customInstructions: "", // extra free-form instructions added to every prompt
-  pingAuto: true,      // ping the server's IP addresses automatically when a brief is shown
-  bmcUrl: "https://{ip}", // how to open a BMC web UI; {ip} is replaced
-  bmcUser: "ADMIN",    // username for the BMC login (the password is pasted in the panel)
-  netboxEnabled: true,
-  netboxUrl: "https://netbox.prod.lambdalabs.cloud",
-  netboxToken: "",     // optional; by default your NetBox browser login is used
-  podcrawlerUrl: "https://podcrawler.aws.lambdalabs.cloud/#/racking",
-  podcrawlerStep: true, // add a "rescan in Podcrawler" step to replacement tickets
-  // Lambda parts catalog (Google Sheet shared by link): Lambda P/N ↔ manufacturer P/N ↔ description
-  catalogUrl: "https://docs.google.com/spreadsheets/d/1HkdgvcwHJ-HuDR90mmsVTNbuUqEtjRmYWpKF5hgCDAY/edit#gid=613788530",
-  slackIn: "browser"   // clicking a name opens the chat in Slack in Chrome ("browser") or just opens the desktop app ("app")
-};
-
-async function getSettings() {
-  const stored = await chrome.storage.local.get([...Object.keys(DEFAULTS), "apiKey", "model"]);
-  const s = { ...DEFAULTS, ...stored, models: { ...(stored.models || {}) }, privacyHide: { ...DEFAULTS.privacyHide, ...(stored.privacyHide || {}) } };
-  // Migrate settings from v1 (Anthropic only).
-  if (!s.anthropicKey && stored.apiKey) s.anthropicKey = stored.apiKey;
-  if (!s.models.anthropic && stored.model) s.models.anthropic = stored.model;
-  return s;
-}
-
-function providerLabel(id) {
-  return PROVIDERS[id]?.label || id;
-}
-
-// Returns a human-readable problem if the provider isn't configured, else "".
-function missingConfig(s) {
-  switch (s.provider) {
-    case "anthropic": return s.anthropicKey ? "" : "Add your Anthropic API key in Settings (⚙). No key yet? Settings → Getting started shows how to get one from IT.";
-    case "openai":    return s.openaiKey ? "" : "Add your OpenAI API key in Settings (⚙). No key yet? Settings → Getting started shows how to get one from IT.";
-    case "gemini":    return s.geminiKey ? "" : "Add your Gemini API key in Settings (⚙). No key yet? Settings → Getting started shows how to get one from IT.";
-    case "local":     return s.localBaseUrl ? "" : "Set your local server URL in Settings (⚙).";
-    default:          return "Choose an AI provider in Settings (⚙).";
-  }
-}
-
-// Keyboard shortcuts as shown in hints (Mac vs Windows/Linux).
-const IS_MAC = /mac/i.test(navigator.userAgentData?.platform || navigator.platform || "");
-const IS_WIN = /win/i.test(navigator.userAgentData?.platform || navigator.platform || "");
-const KEYS = IS_MAC
-  ? { paste: "⌘V", quickAccess: "⌘⇧Space", slackSearch: "⌘K" }
-  : { paste: "Ctrl+V", quickAccess: "Ctrl+Shift+Space", slackSearch: "Ctrl+K" };
 
 // ---------- HTTP helpers ----------
 

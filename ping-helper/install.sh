@@ -1,5 +1,5 @@
 #!/bin/bash
-# Installs the DC Ops ping helper so the Chrome extension can ping servers.
+# Installs the Lambda DC Ops Assistant helper so the Chrome extension can ping servers and talk to BMCs.
 # Usage:  bash install.sh <extension-id>
 # The exact command (with your extension ID) is shown in the extension's Settings page.
 set -euo pipefail
@@ -70,7 +70,7 @@ import json, sys
 out, path, ext_id, name = sys.argv[1:5]
 json.dump({
     "name": name,
-    "description": "DC Ops ping helper",
+    "description": "Lambda DC Ops Assistant helper (ping, BMC)",
     "path": path,
     "type": "stdio",
     "allowed_origins": [f"chrome-extension://{ext_id}/"],
