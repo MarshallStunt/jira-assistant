@@ -206,6 +206,8 @@ button.person:hover { border-bottom-style: solid; }
 .ping-box { margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--border); }
 .ping-head { display: flex; align-items: center; gap: 4px; }
 .ping-age { text-transform: none; letter-spacing: 0; font-weight: 500; }
+.ping-power { margin-top: 8px; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--warn); background: var(--warn-bg2); font-size: 12px; }
+.ping-power > b:first-child { color: var(--warn); }
 .ping-msg { font-size: 12px; margin-bottom: 6px; }
 .ping-msg.bad { color: var(--warn); }
 .ping-msg + button.mini { margin-left: 0; }

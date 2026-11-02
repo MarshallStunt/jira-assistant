@@ -10,7 +10,7 @@ A side panel for Datacenter Operations. Open a Jira ticket and get a one-glance 
 3. **Install the helper** (ping, BMC). Settings → *Getting started* → **Copy** the setup command and run it: on a Mac in **Terminal**, on Windows in **PowerShell**. It asks before installing anything.
 4. **Paste the key**, click **Load models**, then **Save**. Open any Jira ticket.
 
-**Updates:** Chrome checks the private GitHub repo every 2 hours with your GitHub login (you need access to the repo). A new version shows a red **NEW** badge on the toolbar icon, one notification (click it to open Settings → Updates), and a 🆕 banner at the top of the panel; **Later** hides the banner and badge until the next version. **⬇️ Update now** downloads it with your GitHub login, the helper puts it in your jira-assistant folder (`git pull` if it's a git copy, otherwise the new files over the old ones) and updates itself, and the extension reloads. *Update by hand* has a command that does the same from Terminal/PowerShell (or a ZIP link). Settings → Start → **Check for updates** checks right away. Needs helper 1.6.0 or later: older helpers update by hand once. The footer of the panel shows the version.
+**Updates:** Chrome checks the private GitHub repo every 2 hours, and the panel checks on every Analyze / Re-analyze, with your GitHub login (you need access to the repo). A new version shows a red **NEW** badge on the toolbar icon, one notification (click it to open Settings → Updates), and a 🆕 banner at the top of the panel; **Later** hides the banner and badge until the next version. **⬇️ Update now** downloads it with your GitHub login, the helper puts it in your jira-assistant folder (`git pull` if it's a git copy, otherwise the new files over the old ones) and updates itself, and the extension reloads. *Update by hand* has a command that does the same from Terminal/PowerShell (or a ZIP link). Settings → Start → **Check for updates** checks right away. Needs helper 1.6.0 or later: older helpers update by hand once. The footer of the panel shows the version.
 
 ## The panel, top to bottom
 - **🆕 Update banner** when GitHub has a newer version (see *Updates* above).
@@ -19,7 +19,7 @@ A side panel for Datacenter Operations. Open a Jira ticket and get a one-glance 
 - **Ticket strip**: job type, status, priority; 👤 assignee and 📝 reporter (click a name to message them on Slack).
 - **⏻ Power-down verdict**: ✓ OK · i Not needed · ! Confirm first · ✕ Do NOT, with reason and evidence. Without explicit approval in the ticket it never says OK.
 - **📋 Request** and **⚠️ Cautions**.
-- **🖥️ Server & 📍 Location**: hostnames (click to copy), site, row/rack/RU, any ticket-vs-NetBox mismatch, and **📡 Reachability** (ping of the ticket's and NetBox's IPs, with the network you go out on, e.g. `via utun4 (VPN)`).
+- **🖥️ Server & 📍 Location**: hostnames (click to copy), site, row/rack/RU, any ticket-vs-NetBox mismatch, and **📡 Reachability** (ping of the ticket's and NetBox's IPs, with the network you go out on, e.g. `via utun4 (VPN)`). If the server doesn't answer ping (and its BMC does), it says the chassis is most likely already powered down; that note also goes into the Jira comment.
 - **🔧 BMC**: health, 🖥️ remote console and power control (below).
 - **✅ Next steps** checklist (risky steps in red; a Podcrawler rescan step is added for replacements) and **🧰 Parts & tools** with the parts catalog and stock (below).
 - **🕘 History**, **🗄️ NetBox** and **❓ To confirm** (collapsed; they remember if you open them).

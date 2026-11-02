@@ -215,7 +215,10 @@ function asJiraComment(key, r, ping, netbox, bmc, bmcPower) {
 function pingCommentLines(ping) {
   if (!ping?.results?.length) return [];
   const when = new Date(ping.at || Date.now()).toLocaleString();
-  return [`*Reachability (from ${ping.source || "my workstation"}, ${when}):*`, ...ping.results.map((x) => `* ${pingSummary(x)}`)];
+  const guess = serverPowerGuess(ping.results);
+  const note = { "bmc-up": "Server not answering ping while its BMC is: most likely already powered down.",
+    "no-bmc": "Server not answering ping: most likely already powered down (or off the network)." }[guess];
+  return [`*Reachability (from ${ping.source || "my workstation"}, ${when}):*`, ...ping.results.map((x) => `* ${pingSummary(x)}`), ...(note ? [`* _${note}_`] : [])];
 }
 
 // Replacement work changes serials/MACs → make sure the Podcrawler rescan step is there.

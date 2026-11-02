@@ -210,6 +210,16 @@ function renderPing(box, state, actions) {
     ));
   }
   box.appendChild(rows);
+  const guess = serverPowerGuess(resp.results);
+  if (guess) {
+    const off = h("b", {}, "the chassis is most likely already powered down");
+    const confirm = " Confirm the power state on the BMC (Check health) before you start.";
+    box.appendChild(h("div", { class: "ping-power" }, h("b", {}, "⏻ "), ...{
+      "bmc-up": ["The server isn't answering ping but its BMC is: ", off, ".", confirm],
+      "no-bmc": ["The server isn't answering ping: ", off, " (or it's off the network).", confirm],
+      "all-down": ["Neither the server nor its BMC answer ping: you may not be on the datacenter network or VPN. If you are, the server is most likely powered down."]
+    }[guess]));
+  }
 }
 
 // "ORD01 - Elk Grove Village, IL (EdgeConnex CHI02)" → { code: "ORD01", detail: "Elk Grove Village, IL (EdgeConnex CHI02)" }

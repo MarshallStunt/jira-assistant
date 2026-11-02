@@ -78,6 +78,16 @@ function interfaceLabel(x) {
 }
 
 // One-line text version, used for the Jira comment.
+// None of the server's own addresses answer ping → it's most likely already powered down. The BMC tells that
+// apart from a network problem, since it stays on (and answers) while the server is off.
+// "bmc-up" (most likely off) · "no-bmc" (likely off, or off the network) · "all-down" (probably the network) · null
+function serverPowerGuess(results) {
+  const server = results.filter((x) => x.ok && !["bmc", "other"].includes(x.role));
+  const bmc = results.filter((x) => x.ok && x.role === "bmc");
+  if (!server.length || server.some((x) => x.reachable)) return null;
+  return bmc.some((x) => x.reachable) ? "bmc-up" : bmc.length ? "all-down" : "no-bmc";
+}
+
 function pingSummary(x) {
   const who = `${ROLE_LABEL[x.role] || "Host"} ${x.address}${x.ip && x.ip !== x.address ? ` (${x.ip})` : ""}`;
   if (!x.ok) return `${who} — ${x.error}`;

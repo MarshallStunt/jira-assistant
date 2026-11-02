@@ -556,10 +556,11 @@ async function setupPing(key, brief, ticketIps, extraTargets = []) {
 }
 
 // ---------- Update banner ----------
-// Shown when GitHub has a newer version (checked every few hours). "Later" hides it until the next version.
+// Shown when GitHub has a newer version: checked when the panel opens (at most every 2 hours) and on every
+// Analyze / Re-analyze (always). "Later" hides it until the next version.
 
-async function showUpdateBar() {
-  const u = await checkForUpdate();
+async function showUpdateBar(force = false) {
+  const u = await checkForUpdate(force);
   showUpdateBadge(u);
   const { updateLater } = await chrome.storage.local.get("updateLater");
   if (!u.available || updateLater === u.latest) return $("updateBar").classList.add("hidden");
@@ -615,6 +616,7 @@ async function renderEmpty(tab, settings) {
 
 async function analyze(force = false) {
   if (!current.key || current.running) return;
+  showUpdateBar(true).catch((e) => console.warn("update check", e)); // every analysis also checks for a new version
   const key = current.key;
   const settings = await getSettings();
 
