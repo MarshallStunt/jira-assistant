@@ -375,6 +375,9 @@ button.link.part-open { margin-left: auto; display: inline-flex; gap: 3px; }
 .rma-cand.chosen { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
 .rma-tag { display: inline-block; margin-left: 6px; font-size: 10.5px; padding: 0 6px; border-radius: 10px; border: 1px solid currentColor; }
 .rma-tag.ok { color: var(--ok); }
+.rma-tag.info { color: var(--accent); }
+.rma-serialnote { font-size: 12px; color: var(--ok); }
+.rma-tag.bad { color: var(--err); }
 .rma-tag.warn { color: var(--warn); }
 .rma-result { display: flex; gap: 6px; margin-top: 8px; }
 .part-flag { margin-top: 4px; font-size: 11.5px; color: var(--warn); }

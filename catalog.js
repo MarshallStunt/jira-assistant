@@ -139,11 +139,14 @@ async function loadCatalog(sheetUrl, force = false) {
 }
 
 // A whole server / chassis, not a field-replaceable part (the ticket often quotes these).
-// Legacy SKU prefixes CSN (complete servers/appliances), DGX and TNB (laptops) are whole systems.
+// Lambda P/N families decide: 201-/203- are whole systems, every other 2xx- family is a part (a "switch board for
+// 4U 8 SXM5 GPU system" is a part). Legacy SKUs CSN (servers/appliances), DGX and TNB (laptops) are whole systems.
+// Words ("server", "system") only decide for rows without a Lambda P/N family.
 function isWholeSystem(p) {
+  if (/^20[13]-/.test(p.lambda) || /^(CSN|DGX|TNB)/.test(p.legacy) || /^(SYS|AS|ARS)\s*-/i.test(p.mpn)) return true;
+  if (/^2\d\d-/.test(p.lambda)) return false;
   const text = `${p.name} ${p.desc}`;
-  return /^20[13]-/.test(p.lambda) || /^(CSN|DGX|TNB)/.test(p.legacy) || /^(SYS|AS|ARS)\s*-/i.test(p.mpn) ||
-    (/\b(server|chassis|system)\b/i.test(text) && !/\b(fan|psu|power supply|rail|bracket|kit|cable|backplane|midplane|riser|tray|module|card)\b/i.test(text));
+  return /\b(server|chassis|system)\b/i.test(text) && !/\b(fan|psu|power supply|rail|bracket|kit|cable|backplane|midplane|riser|tray|module|card|board)\b/i.test(text);
 }
 
 // Catalog parts whose Lambda P/N, legacy SKU, MPN or vendor P/N appear in the given texts.

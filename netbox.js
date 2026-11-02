@@ -1,5 +1,5 @@
 // NetBox: find the ticket's server (location, IPs, cabling, Lambda SKU, journal, modules) and compare it with
-// the ticket, and look up spare parts in storage (inventory plugins).
+// the ticket, look up spare parts in storage (inventory plugins), and find a part by its serial number (RMA card).
 // Auth: your NetBox browser login (session cookie) by default, or a personal API token from Settings.
 
 class NetboxAuthError extends Error {}
@@ -292,4 +292,32 @@ async function netboxStockForPart(settings, part, siteCode) {
   } catch {
     return own;
   }
+}
+
+// ---------- A part by its serial number ----------
+// What NetBox knows about one serial: a stored/used spare in the inventory plugin (named "<P/N>_<serial>"), or a
+// module / inventory item installed in a device. Returns { id, where } (id = P/N, SKU or model) or null.
+async function netboxPartBySerial(settings, serial) {
+  const sn = String(serial || "").trim();
+  if (sn.length < 5) return null;
+  const same = (s) => String(s || "").toUpperCase().replace(/[^A-Z0-9]/g, "") === sn.toUpperCase().replace(/[^A-Z0-9]/g, "");
+  try {
+    const assets = await nbGet(settings, `/api/plugins/inventory/assets/?q=${encodeURIComponent(sn)}&limit=10`).catch(() => ({ results: [] }));
+    for (const a of assets.results || []) {
+      if (!same(a.serial) && !same(String(a.name || "").split("_").slice(1).join("_"))) continue;
+      const type = a.module_type || a.device_type || a.inventoryitem_type;
+      const id = String(a.name || "").split("_")[0] || type?.part_number || type?.model;
+      if (id) return { id, where: `NetBox inventory (${a.status?.label || a.status?.value || a.status || "asset"}${a.storage_location?.name ? `, ${a.storage_location.name}` : ""})` };
+    }
+    const modules = await nbGet(settings, `/api/dcim/modules/?serial=${encodeURIComponent(sn)}&limit=5`).catch(() => ({ results: [] }));
+    for (const m of modules.results || []) {
+      const id = m.module_type?.part_number || m.module_type?.model;
+      if (id) return { id, where: `NetBox module on ${m.device?.name || "a device"}` };
+    }
+    const items = await nbGet(settings, `/api/dcim/inventory-items/?serial=${encodeURIComponent(sn)}&limit=5`).catch(() => ({ results: [] }));
+    for (const i of items.results || []) {
+      if (i.part_id) return { id: i.part_id, where: `NetBox inventory item on ${i.device?.name || "a device"}` };
+    }
+  } catch { /* NetBox unreachable: the form still works without it */ }
+  return null;
 }

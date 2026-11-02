@@ -1,21 +1,18 @@
-// RMA card: starts an RMA the way techs do it in Jira, from the open DC ticket.
+// RMA card: opens the RMA ticket for the open DC ticket, the way techs do it in Jira.
 // 1. Asks for the failed part (Lambda P/N, MPN), the old S/N, the new S/N and a description, and shows everything for review.
-// 2. Creates a "Component Replacement" under the ticket. Jira Automation copies the server details from the parent.
-// 3. Fills in the MPN and both serials, then sets "Does this qualify for a RMA?" = Yes: Jira Automation then opens
-//    the RMA-xxxx ticket and links it. Everything runs in the Jira tab with the user's own login.
+// 2. Creates the RMA ticket in the RMA project (request type "Advance Replacement" by default), copies the server
+//    details from the DC ticket (every field both have: hostname, chassis SN, device type, site, location, links…),
+//    fills in the part and serials, and links it to the DC ticket ("relates to"). Runs in the Jira tab with the user's login.
 // If the ticket already has an RMA ticket (linked to it or to one of its sub-tasks), no new one is created: the details
 // are added to that RMA ticket as an internal comment instead.
-// Fields are found by name, so nothing depends on this Jira's field IDs. "Lambda Part Number" is left alone:
-// Automation fills it with the server's own P/N.
+// Fields are found by name, so nothing depends on this Jira's field IDs.
 
 const RMA_FIELD_NAMES = {
-  mpn: "Manufacturer Part Number", oldSn: "Faulty Part SN", newSn: "Replacement SN", component: "Component Issue",
-  ship: "Ship a Replacement Unit to the DC?", rmaType: "RMA Type", qualifies: "Does this qualify for a RMA?"
+  mpn: "Manufacturer Part Number", oldSn: "Faulty Part SN", newSn: "Replacement SN", faultyPn: "Faulty Part Number",
+  component: "Component Issue", rmaType: "RMA Type"
 };
-const RMA_TYPES = ["Component Replacement", "Sub-task"]; // preferred child work item types, in order
-const RMA_PROJECT = "RMA"; // the project Automation opens RMA tickets in
-const RMA_AUTOMATION_WAIT_MS = 5000;  // Automation copies the parent's server details right after creation
-const RMA_TICKET_WAIT_MS = 45000;     // how long to wait for Automation's RMA-xxxx ticket
+const RMA_PROJECT = "RMA";                      // the RMA Request project
+const RMA_DEFAULT_KIND = "Advance Replacement"; // request type used unless the tech picks another
 
 // Runs inside the Jira tab (chrome.scripting), so it must be self-contained.
 async function rmaJiraInPage(op, a) {
@@ -32,24 +29,92 @@ async function rmaJiraInPage(op, a) {
     }
     return data;
   };
+  // A work item type's create fields (Jira returns at most 200 per request).
+  const fieldsOf = async (project, typeId) => {
+    const out = [];
+    for (let start = 0; start < 2000; start += 200) {
+      const meta = await call("GET", `/rest/api/3/issue/createmeta/${encodeURIComponent(project)}/issuetypes/${typeId}?maxResults=200&startAt=${start}`);
+      const page = meta.fields || meta.values || [];
+      out.push(...page);
+      if (page.length < 200 || meta.isLast) break;
+    }
+    return out;
+  };
   try {
+    // The RMA project's kinds (its service desk request types) and the fields of the default kind.
     if (op === "meta") {
       const types = await call("GET", `/rest/api/3/issue/createmeta/${encodeURIComponent(a.project)}/issuetypes?maxResults=100`);
-      const list = types.issueTypes || types.values || [];
-      const type = a.typeNames.map((n) => list.find((t) => t.name === n)).find(Boolean);
-      if (!type) return { ok: false, error: `Project ${a.project} has no ${a.typeNames.join(" or ")} work item type.` };
-      // Jira returns at most 200 fields per request: page through them.
+      const typeList = types.issueTypes || types.values || [];
+      let kinds = [];
+      try {
+        const desk = (await call("GET", "/rest/servicedeskapi/servicedesk?limit=100")).values?.find((d) => d.projectKey === a.project);
+        if (desk) {
+          kinds = ((await call("GET", `/rest/servicedeskapi/servicedesk/${desk.id}/requesttype?limit=100`)).values || [])
+            .map((r) => ({ name: r.name.trim(), requestTypeId: r.id, typeId: r.issueTypeId }))
+            .filter((k) => typeList.some((t) => t.id === k.typeId));
+        }
+      } catch { /* no service desk access: fall back to the work item types */ }
+      if (!kinds.length) kinds = typeList.filter((t) => !t.subtask && t.name !== "Task").map((t) => ({ name: t.name, typeId: t.id }));
+      if (!kinds.length) return { ok: false, error: `Can't create tickets in the ${a.project} project.` };
+      const def = kinds.find((k) => k.name === a.defaultKind) || kinds[0];
       const fields = {};
-      for (let start = 0, more = true; more && start < 2000; start += 200) {
-        const meta = await call("GET", `/rest/api/3/issue/createmeta/${encodeURIComponent(a.project)}/issuetypes/${type.id}?maxResults=200&startAt=${start}`);
-        const page = meta.fields || meta.values || [];
-        for (const f of page) fields[f.name] = { id: f.fieldId, options: (f.allowedValues || []).map((v) => v.value || v.name).filter(Boolean) };
-        more = page.length === 200 && !meta.isLast;
-      }
-      return { ok: true, type: { id: type.id, name: type.name }, fields };
+      for (const f of await fieldsOf(a.project, def.typeId)) fields[f.name] = { id: f.fieldId, options: (f.allowedValues || []).map((v) => v.value || v.name).filter(Boolean) };
+      return { ok: true, kinds, defaultKind: def.name, fields };
     }
-    if (op === "create") return { ok: true, key: (await call("POST", "/rest/api/3/issue", { fields: a.fields })).key };
-    if (op === "update") { await call("PUT", `/rest/api/3/issue/${encodeURIComponent(a.key)}`, { fields: a.fields }); return { ok: true }; }
+    // Create the RMA ticket: the DC ticket's server details (every field both have) plus the RMA fields.
+    if (op === "createRma") {
+      const rmaFields = await fieldsOf(a.project, a.kind.typeId);
+      const dc = (await call("GET", `/rest/api/3/issue/${encodeURIComponent(a.dcKey)}?fields=*all`)).fields || {};
+      const fields = { project: { key: a.project }, issuetype: { id: a.kind.typeId }, summary: a.summary, description: a.description, ...a.fields };
+      const skip = new Set(["summary", "description", "issuetype", "project", "reporter", "assignee", "labels", "priority", "parent",
+        "components", "duedate", "issuelinks", "attachment", "customfield_10010", ...Object.keys(a.fields)]);
+      const copied = [];
+      for (const f of rmaFields) {
+        const v = dc[f.fieldId];
+        if (skip.has(f.fieldId) || v === null || v === undefined || v === "" || (Array.isArray(v) && !v.length)) continue;
+        const allowed = (f.allowedValues || []).map((x) => x.value || x.name);
+        const ok = (val) => !allowed.length || allowed.includes(val);
+        const t = f.schema?.type;
+        let out = null;
+        if (t === "option" && v.value && ok(v.value)) out = { value: v.value };
+        else if (t === "array" && f.schema.items === "option") out = v.filter((x) => ok(x.value)).map((x) => ({ value: x.value }));
+        else if (t === "string" && typeof v === "string") out = v;
+        else if (t === "number" && typeof v === "number") out = v;
+        else if ((t === "date" || t === "datetime") && typeof v === "string") out = v;
+        if (out !== null && !(Array.isArray(out) && !out.length)) { fields[f.fieldId] = out; copied.push(f.name); }
+      }
+      // The service desk request type puts it in the right queue; if Jira won't take it here, create without it.
+      let created;
+      try {
+        created = await call("POST", "/rest/api/3/issue", { fields: a.kind.requestTypeId ? { ...fields, customfield_10010: String(a.kind.requestTypeId) } : fields });
+      } catch (e) {
+        if (!a.kind.requestTypeId || !/customfield_10010|request type/i.test(e.message)) throw e;
+        created = await call("POST", "/rest/api/3/issue", { fields });
+      }
+      return { ok: true, key: created.key, copied };
+    }
+    // What techs used before: past RMA tickets for the same server model (the DC ticket's "Device Type") and component.
+    if (op === "history") {
+      const i = await call("GET", `/rest/api/3/issue/${encodeURIComponent(a.dcKey)}?fields=*all&expand=names`);
+      const idOf = (name) => Object.keys(i.names || {}).find((k) => i.names[k] === name);
+      const device = String(i.fields[idOf("Device Type")] || "");
+      const model = (device.match(/\b(?:SYS|AS|ARS)-[A-Z0-9-]+?(?=-\d{2}-LL\d+|-LL\d+|\s|$)/i) || [])[0] || device.replace(/^\S+\s+|\s+[\d.]+$/g, "").trim();
+      if (!model || !a.component) return { ok: true, model, counts: {} };
+      const read = ["Manufacturer Part Number", "Faulty Part Number"].map(idOf).filter(Boolean);
+      const jql = `project = ${a.project} AND "Device Type" ~ "${model.replace(/"/g, "")}" AND "Component Issue" = "${a.component.replace(/"/g, "")}" ORDER BY created DESC`;
+      const r = await call("GET", `/rest/api/3/search/jql?jql=${encodeURIComponent(jql)}&maxResults=100&fields=${read.join(",")}`);
+      const counts = {};
+      for (const x of r.issues || []) {
+        const ids = new Set(read.flatMap((k) => String(x.fields[k] || "").toUpperCase().match(/\b(?:\d{3}-\d{6}|[A-Z]{2,5}-[A-Z0-9-]{3,}|[A-Z]{3}\d{4})\b/g) || []));
+        for (const t of ids) counts[t] = (counts[t] || 0) + 1;
+      }
+      return { ok: true, model, counts, tickets: (r.issues || []).length };
+    }
+    // "relates to" link between the RMA ticket and the DC ticket.
+    if (op === "link") {
+      await call("POST", "/rest/api/3/issueLink", { type: { name: "Relates" }, inwardIssue: { key: a.from }, outwardIssue: { key: a.to } });
+      return { ok: true };
+    }
     // RMA tickets already linked to the DC ticket or to its sub-tasks (where Automation links them).
     if (op === "existing") {
       const i = await call("GET", `/rest/api/3/issue/${encodeURIComponent(a.key)}?fields=issuelinks,subtasks`);
@@ -71,11 +136,6 @@ async function rmaJiraInPage(op, a) {
       await call("POST", `/rest/api/3/issue/${encodeURIComponent(a.key)}/comment`, { body: a.body, properties: [{ key: "sd.public.comment", value: { internal: true } }] });
       return { ok: true };
     }
-    if (op === "links") {
-      const i = await call("GET", `/rest/api/3/issue/${encodeURIComponent(a.key)}?fields=issuelinks`);
-      const keys = (i.fields.issuelinks || []).map((l) => (l.outwardIssue || l.inwardIssue)?.key).filter(Boolean);
-      return { ok: true, keys, origin: location.origin + ctx };
-    }
     return { ok: false, error: `Unknown operation ${op}` };
   } catch (e) {
     return { ok: false, error: e.message };
@@ -96,6 +156,7 @@ function guessComponent(options, part, ticketText) {
   const text = `${part?.name || ""} ${part?.desc || ""} ${part?.lambda || ""} ${part?.legacy || ""}`.toLowerCase();
   const pick = (re) => options.find((o) => re.test(o));
   const pn = String(part?.lambda || "").slice(0, 3);
+  if (/switch ?board|plx|pcie switch/.test(text)) return pick(/PCIE Switch/i); // "switch board for … SXM5 GPU system" isn't a GPU
   if (/^204/.test(pn) || /baseboard|hgx/.test(text)) return pick(/^GPU Baseboard$/i);
   if (/^206/.test(pn) || /\b(gpu|h100|h200|b200|b300|a100)\b/.test(text)) {
     if (/fall(en)? off the bus|xid\s*79/i.test(ticketText)) return pick(/FALLEN/i) || pick(/^GPU$/i);
@@ -105,7 +166,7 @@ function guessComponent(options, part, ticketText) {
     if (/missing memory|row remap/i.test(ticketText)) return pick(/MISSING MEMORY/i) || pick(/^GPU$/i);
     return pick(/^GPU$/i);
   }
-  const map = [[/^217|riser/, /Riser/i], [/backplane/, /BackPlane/i], [/pcie switch/, /PCIE Switch/i], [/\bm\.2\b/, /^M\.2$/i],
+  const map = [[/switch ?board|plx|pcie switch/, /PCIE Switch/i], [/^217|riser/, /Riser/i], [/backplane/, /BackPlane/i], [/\bm\.2\b/, /^M\.2$/i],
     [/^207|dimm|memory|rdimm/, /^DIMM$/i], [/^20[89]|ssd|nvme|drive/, /SSD|NVME/i], [/^214|psu|power supply/, /^PSU$/i],
     [/^211|connectx|nic|hca|bluefield|bf3/, /NIC|HCA/i], [/^205|cpu|xeon|epyc/, /^CPU$/i], [/^213|motherboard|mainboard/, /Motherboard/i],
     [/fan/, /^Fan$/i], [/^23[68]|optic|transceiver|osfp|qsfp/, /Optic/i], [/cable/, /Cable/i]];
@@ -115,9 +176,10 @@ function guessComponent(options, part, ticketText) {
 
 const cleanSn = (s) => String(s || "").trim().replace(/\s+/g, "").toUpperCase();
 
+// Like the RMA tickets techs open: "ord01-cl01-hgx-0084 - replace NVIDIA H100 80 GB SXM5 SN 1653623034699".
 function rmaSummary(f) {
   const what = f.partName || [f.lambda, f.mpn].filter(Boolean).join(" ") || "part";
-  return `RMA ${what} SN ${f.oldSn}`.slice(0, 250);
+  return `${f.hostname ? `${f.hostname} - ` : ""}replace ${what} SN ${f.oldSn}`.slice(0, 250);
 }
 
 // Jira's rich-text format for the description: one paragraph per line.
@@ -139,7 +201,7 @@ function rmaComment(f, key) {
     `Failed part: ${[f.lambda && `Lambda P/N ${f.lambda}`, f.mpn && `MPN ${f.mpn}`, f.partName].filter(Boolean).join(" · ")}`,
     `Faulty part S/N (old): ${f.oldSn}`,
     `Replacement S/N (new): ${f.newSn}`,
-    [f.component && `Component: ${f.component}`, f.ship && `Ship a replacement: ${f.ship}`, f.rmaType && `RMA type: ${f.rmaType}`].filter(Boolean).join(" · "),
+    [f.component && `Component: ${f.component}`, f.rmaType && `RMA type: ${f.rmaType}`].filter(Boolean).join(" · "),
     ...String(f.description || "").split(/\n+/).map((l) => l.trim()).filter(Boolean),
     "Added with Lambda Rackside."
   ].filter(Boolean);
@@ -155,7 +217,7 @@ function rmaProblems(f) {
   for (const [k, label] of [["oldSn", "old S/N"], ["newSn", "new S/N"]]) {
     if (f[k] && (f[k].length < 4 || !/^[A-Z0-9._\/-]+$/.test(f[k]))) out.push(`The ${label} doesn't look like a serial number.`);
   }
-  if (!f.ship) out.push("Choose whether a replacement unit should be shipped to the DC.");
+  if (!f.kind) out.push("Choose the kind of RMA.");
   if (String(f.description || "").trim().length < 10) out.push("Describe the failure in a few words.");
   return out;
 }
@@ -171,7 +233,7 @@ function renderRma(box, state, actions) {
 
   if (state.error) box.appendChild(h("div", { class: "ping-msg bad" }, state.error));
   if (state.step === "idle" && !state.result) {
-    box.appendChild(h("div", { class: "muted rma-intro" }, "After swapping a failed part: creates the Component Replacement under this ticket with the part and both serial numbers, and marks it for RMA so Jira opens the RMA ticket."));
+    box.appendChild(h("div", { class: "muted rma-intro" }, "After swapping a failed part: opens the RMA ticket with the part and both serial numbers, copies the server details from this ticket and links the two. If this ticket already has an RMA, adds to it instead."));
   }
   if (state.step === "loading") box.appendChild(h("div", { class: "muted" }, h("span", { class: "spinner" }), "Reading the RMA fields from Jira…"));
   if (state.step === "form") box.appendChild(rmaForm(state, actions));
@@ -192,14 +254,28 @@ function rmaCatalogPicker(state, actions) {
   const f = state.form;
   const list = h("div", { class: "rma-cands" });
   const show = () => {
-    const matches = catalogByDescription(state.catalog, f.partDesc);
+    // Parts confirmed by NetBox (serial) or used before on this server model come first, then description matches.
+    const pinned = [];
+    for (const x of state.pinned || []) {
+      const same = pinned.find((p) => partId(p.part) === partId(x.part));
+      if (same) same.tags.push(...x.tags.filter((t) => !same.tags.includes(t)));
+      else pinned.push({ part: x.part, exact: false, sameAs: [], tags: [...x.tags] });
+    }
+    const matches = [...pinned, ...catalogByDescription(state.catalog, f.partDesc).filter((m) => !pinned.some((x) => partId(x.part) === partId(m.part))).map((m) => ({ ...m, tags: [] }))];
+    for (const m of matches) {
+      const n = state.historyCount?.[partId(m.part)];
+      if (n && !m.tags.some((t) => /^used/.test(t))) m.tags.push(`used ${n}× on ${state.historyModel}`);
+      m.misfit = serverMismatch(state.serverText, m.part);
+    }
     list.replaceChildren(...(matches.length ? matches.map((m) => {
       const p = m.part, chosen = f.lambda && p.lambda === f.lambda;
-      return h("button", { type: "button", class: `rma-cand${chosen ? " chosen" : ""}`, onclick: () => actions.onPickPart(p, m.exact ? "catalog: exact description" : "catalog: picked") },
+      return h("button", { type: "button", class: `rma-cand${chosen ? " chosen" : ""}`, onclick: () => actions.onPickPart(p, "picked from the list") },
         h("b", {}, partId(p)), " ", [p.vendor, p.name].filter(Boolean).join(" "),
         p.legacy && p.legacy !== partId(p) && h("span", { class: "muted" }, ` · ${p.legacy}`),
         p.mpn && h("span", { class: "muted" }, ` · ${p.mpn}`),
+        m.tags.map((t) => h("span", { class: `rma-tag ${/NetBox/.test(t) ? "ok" : "info"}` }, t)),
         m.exact && h("span", { class: "rma-tag ok" }, "exact"),
+        m.misfit && h("span", { class: "rma-tag bad" }, `doesn't fit this server: ${m.misfit}`),
         m.sameAs.length > 0 && h("span", { class: "rma-tag warn" }, `same description as ${m.sameAs.slice(0, 3).join(", ")}`),
         p.inactive && h("span", { class: "rma-tag warn" }, p.replacedBy ? `EOL → ${p.replacedBy}` : "EOL"));
     }) : [h("div", { class: "muted" }, f.partDesc ? "No catalog part matches this description. Try fewer or other words." : "Describe the failed part to find it in the catalog.")]));
@@ -234,6 +310,8 @@ function rmaForm(state, actions) {
     f[key] = el.value;
     state.touched.add(key); // the user's own value: never replaced by a suggestion
     badge?.remove();
+    if (key === "oldSn" || key === "newSn") actions.onSerial?.();
+    if (key === "component") actions.onComponent?.();
   };
   const row = (label, key, control) => {
     const badge = rmaSource(state, key);
@@ -263,6 +341,7 @@ function rmaForm(state, actions) {
     h("div", { class: "rma-note" }, `Pre-filled from the ticket, the BMC, the catalog and the AI. Check every value: you confirm them before anything is ${state.existing?.length ? "added" : "created"}.`),
     state.aiBusy && h("div", { class: "muted" }, h("span", { class: "spinner" }), "✨ Reading the ticket and BMC to fill in the rest…"),
     state.aiNote && h("div", { class: "muted rma-ainote" }, state.aiNote),
+    state.serialNote && h("div", { class: "rma-serialnote" }, state.serialNote),
     h("div", { class: "rma-sub" }, "Failed part"),
     pickers,
     rmaCatalogPicker(state, actions),
@@ -276,7 +355,8 @@ function rmaForm(state, actions) {
     desc,
     h("div", { class: "rma-sub" }, "RMA details"),
     opts("component").length ? row("Component", "component", select("component", "component", "Choose…")) : null,
-    opts("ship").length ? row("Ship a replacement?", "ship", select("ship", "ship", "Choose…")) : null,
+    !state.existing?.length && state.meta.kinds?.length ? row("RMA kind", "kind", h("select", { class: "bmc-in", "data-key": "kind" },
+      state.meta.kinds.map((k) => h("option", { value: k.name, selected: f.kind === k.name ? "" : null }, k.name)))) : null,
     opts("rmaType").length ? row("RMA type", "rmaType", select("rmaType", "rmaType", "(optional)")) : null,
     state.warnings?.length ? h("ul", { class: "rma-warnings" }, state.warnings.map((w) => h("li", {}, "⚠️ ", w))) : null,
     state.problems?.length ? h("ul", { class: "rma-problems" }, state.problems.map((p) => h("li", {}, p))) : null,
@@ -291,13 +371,13 @@ function rmaReview(state, actions) {
   const f = state.form;
   const adding = !!state.existing?.length;
   const rows = [
-    adding ? ["Adds", `An internal comment to ${state.target} (no new RMA ticket)`] : ["Creates", `${state.meta.type.name} under ${state.key}`],
+    adding ? ["Adds", `An internal comment to ${state.target} (no new RMA ticket)`] : ["Creates", `${f.kind} RMA ticket in ${RMA_PROJECT}`],
     !adding && ["Summary", rmaSummary(f)],
     ["Failed part", [f.lambda && `Lambda P/N ${f.lambda}`, f.mpn && `MPN ${f.mpn}`].filter(Boolean).join(" · "), "lambda"],
     ["Old S/N", f.oldSn, "oldSn"], ["New S/N", f.newSn, "newSn"],
     ["Description", f.description, "description"],
-    ["Component", f.component, "component"], ["Ship a replacement", f.ship, "ship"], ["RMA type", f.rmaType, "rmaType"],
-    !adding && ["Then", "Sets “Does this qualify for a RMA?” = Yes, so Jira Automation opens the RMA ticket"]
+    ["Component", f.component, "component"], ["RMA type", f.rmaType, "rmaType"],
+    !adding && ["Also", `Copies the server details from ${state.key} (hostname, chassis SN, device type, site, location…) and links the RMA ticket to it (“relates to”)`]
   ].filter((r) => r && r[1]);
   const create = h("button", { class: "primary", disabled: "", onclick: actions.onCreate }, adding ? `✅ Add to ${state.target}` : "✅ Create RMA ticket");
   const tick = h("input", { type: "checkbox" });
@@ -343,6 +423,19 @@ function specConflict(q, pt) {
   }
   return false;
 }
+// Does the part fit the server? A part made for another GPU (A100 parts in an H100 server) or another GPU socket
+// (SXM4 vs the H100's SXM5) doesn't. Returns why not, or "".
+const GPU_SOCKET = { a100: "sxm4", a800: "sxm4", h100: "sxm5", h200: "sxm5", h800: "sxm5", h20: "sxm5" };
+function serverMismatch(serverText, part) {
+  const server = descTokens(serverText), pt = descTokens(`${part.vendor} ${part.name} ${part.desc}`);
+  const gpus = [...server].filter((t) => t in GPU_SOCKET);
+  if (!gpus.length) return "";
+  const partGpus = [...pt].filter((t) => /^[abhl]\d{2,3}$/.test(t));
+  if (partGpus.length && !partGpus.some((t) => gpus.includes(t))) return `made for ${partGpus.join("/").toUpperCase()}, this server has ${gpus.join("/").toUpperCase()}`;
+  const sockets = new Set(gpus.map((g) => GPU_SOCKET[g])), partSockets = [...pt].filter((t) => /^sxm\d$/.test(t));
+  if (partSockets.length && !partSockets.some((t) => sockets.has(t))) return `${partSockets.join("/").toUpperCase()}, this server is ${[...sockets].join("/").toUpperCase()}`;
+  return "";
+}
 const descKey = (p) => [...descTokens(`${p.vendor} ${p.name} ${p.desc}`)].sort().join(" ");
 
 // Catalog parts whose description best matches `text`, best first: [{ part, score, exact, sameAs: [other P/Ns with that description] }].
@@ -371,12 +464,18 @@ function catalogByDescription(catalog, text, limit = 6) {
 
 // ---------- Pre-filling ----------
 
-// Serial numbers written in the ticket or its comments: "old SN: X", "removed S/N X", "new serial X", "installed SN X".
+// Serial numbers written in the ticket or its comments: "old SN: X", "replace GPU SN X", "new serial X", "installed SN X".
 function serialsInText(text) {
   const t = String(text || "");
-  const SN = "([A-Z0-9][A-Z0-9-]{5,40})";
-  const grab = (words) => cleanSn((t.match(new RegExp(`\\b(?:${words})\\b[^\\n]{0,30}?\\b(?:s\\/?n|serial(?: number)?)\\b[\\s:#=-]*${SN}`, "i")) || [])[1]);
-  return { oldSn: grab("old|faulty|failed|bad|defective|removed|original"), newSn: grab("new|replacement|installed|good|spare") };
+  // A serial, stopping before a following "New"/"Old" when the two run together ("OA242S018019New: …").
+  const SN = "([A-Z0-9][A-Z0-9-]{5,40}?)(?=(?:new|old)\\b|[^A-Z0-9-]|$)";
+  const grab = (words) => {
+    const withSn = t.match(new RegExp(`\\b(?:${words})\\b[^\\n]{0,30}?\\b(?:s\\/?n|serial(?: number)?)\\b[\\s:#=-]*${SN}`, "i"));
+    const withColon = t.match(new RegExp(`(?<![a-z])(?:${words})\\b\\s*(?:part\\s*)?[:=#]\\s*${SN}`, "i")); // "OLD: X", "…New: X"
+    return cleanSn((withSn || withColon || [])[1]);
+  };
+  // "replace GPU SN X" (how DC tickets name the failed part) is the old one; "replacement SN X" the new one.
+  return { oldSn: grab("old|faulty|failed|bad|defective|removed|original|replace|replacing|swap|swapping"), newSn: grab("new|replacement|installed|good|spare") };
 }
 
 // A serial the AI suggests is only kept if it appears in the ticket or BMC data (no invented serials).
@@ -390,11 +489,10 @@ const RMA_PREFILL_SCHEMA = {
     old_sn: { type: "string", description: "Serial number of the failed part that was removed, copied exactly from the ticket or BMC data. Empty if not written anywhere." },
     new_sn: { type: "string", description: "Serial number of the replacement part that was installed, copied exactly from the ticket. Empty if not written anywhere." },
     component: { type: "string", description: "Exactly one of the allowed Component Issue values, or empty." },
-    ship_replacement: { type: "string", enum: ["Yes", "No", ""], description: "Should a replacement unit be shipped to the DC? Empty if the ticket doesn't say." },
     rma_type: { type: "string", description: "Exactly one of the allowed RMA Type values if the ticket says (e.g. the OEM replaces it onsite), else empty." },
     description: { type: "string", description: "2 to 4 short factual lines for the RMA: what failed, the errors or symptoms, what was swapped. No serial numbers." }
   },
-  required: ["part_description", "mpn", "old_sn", "new_sn", "component", "ship_replacement", "rma_type", "description"]
+  required: ["part_description", "mpn", "old_sn", "new_sn", "component", "rma_type", "description"]
 };
 
 // Asks the AI to fill in the RMA from the ticket, the BMC and the catalog candidates. Returns {} on failure.
