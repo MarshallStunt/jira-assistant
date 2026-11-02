@@ -202,11 +202,7 @@ function updateJump() {
   nav.classList.toggle("hidden", items.length < 2);
   const shown = [...nav.children].map((b) => b.dataset.for).join();
   if (shown !== items.map(([, id]) => id).join()) {
-    nav.replaceChildren(...items.map(([label, id]) => h("button", { class: "jump-link", "data-for": id, onclick: () => {
-      const target = $(id);
-      if (target.tagName === "DETAILS") target.open = true;
-      target.scrollIntoView({ behavior: "smooth", block: "start" });
-    } }, label)));
+    nav.replaceChildren(...items.map(([label, id]) => h("button", { class: "jump-link", "data-for": id, onclick: () => jumpTo(id) }, label)));
   }
   // Progress on the chips: steps ticked ("✅ Steps 2/5", "✓" when all are), RMA ticket created.
   for (const b of nav.children) {
@@ -226,7 +222,8 @@ function updateJump() {
   markCurrent();
 }
 let jumpFrame;
-new MutationObserver(() => { cancelAnimationFrame(jumpFrame); jumpFrame = requestAnimationFrame(updateJump); })
+// A short timer, not an animation frame: frames don't run while the panel is in the background.
+new MutationObserver(() => { clearTimeout(jumpFrame); jumpFrame = setTimeout(() => { updateGlance(); updateJump(); }, 30); })
   .observe($("result"), { childList: true, subtree: true, attributes: true, attributeFilter: ["class"] });
 
 // You are here: the section you're reading is lit up, in the jump bar and on the page.
@@ -245,6 +242,95 @@ function markCurrent() {
 }
 let spyFrame;
 addEventListener("scroll", () => { cancelAnimationFrame(spyFrame); spyFrame = requestAnimationFrame(markCurrent); }, { passive: true });
+
+// ---------- At a glance ----------
+// One card at the top with what matters, from live systems first (NetBox, ping, BMC, catalog & stock) and the
+// ticket only for the job itself. Each row opens its section. Rebuilt when anything on the page changes.
+let glanceSig = "", glanceStock = { id: "", data: null };
+
+function jumpTo(id) {
+  const target = $(id);
+  if (!target) return;
+  if (target.tagName === "DETAILS") target.open = true;
+  target.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function glanceRows() {
+  const r = lastResult.brief, rows = [];
+  const dev = lastResult.netbox?.ok ? lastResult.netbox.devices[0] : null;
+  // The job (from the ticket)
+  const job = String(r.request_summary || "").split(/(?<=[.!?])\s/)[0];
+  if (r.task_type || job) rows.push({ icon: "🎯", key: r.task_type || "Job", text: job, jump: "request" });
+  // Where: NetBox's record wins over what the ticket says
+  const loc = r.location, site = splitSite(loc.site).code;
+  const where = dev
+    ? [dev.name, dev.site, dev.rack && `rack ${dev.rack}`, dev.position != null && `RU ${dev.position}`]
+    : [r.server_names[0], site, loc.rack && `rack ${loc.rack}`, loc.unit && `RU ${loc.unit}`];
+  const mism = dev?.mismatches?.length || 0;
+  if (where.some(Boolean)) rows.push({ icon: "📍", key: "Where", text: where.filter(Boolean).join(" · "),
+    note: dev ? (mism ? `⚠️ ${mism} mismatch${mism > 1 ? "es" : ""} with the ticket` : "NetBox ✓") : "from the ticket", tone: mism ? "warn" : "", jump: "server" });
+  // Live: ping, plus the BMC's power state and failed parts once health was read
+  const ping = lastResult.ping?.results || [];
+  const bmcHealth = Object.values(lastResult.bmc || {}).filter((x) => x?.ok);
+  if (ping.length || bmcHealth.length) {
+    const role = (x) => (x.role === "bmc" ? "BMC" : "Host");
+    const bits = ping.filter((x) => x.ok).map((x) => `${role(x)} ${x.reachable ? "up" : "down"}`);
+    const guess = serverPowerGuess(ping);
+    const power = bmcHealth.map((x) => x.system?.power).find(Boolean);
+    const failed = bmcHealth.flatMap((x) => x.problems || []);
+    if (power) bits.push(`power ${power}`);
+    if (failed.length) bits.push(`${failed.length} failed part${failed.length > 1 ? "s" : ""}`);
+    const down = ping.some((x) => x.ok && !x.reachable);
+    rows.push({ icon: "📡", key: "Live", text: [...new Set(bits)].join(" · ") || "checking…",
+      note: guess === "bmc-up" && !power ? "chassis most likely powered off" : !bmcHealth.length && ping.some((x) => x.role === "bmc") ? "BMC health not read" : "",
+      tone: failed.length ? "bad" : down ? "warn" : "ok", jump: $("bmcBox") && !$("bmcBox").classList.contains("hidden") ? "bmcBox" : "server" });
+  }
+  // The part: the BMC's failed part or the first replaceable catalog match, with its spare stock here
+  const ps = partsView?.key === current.key ? partsView.state : null;
+  const part = ps?.matches?.find((p) => p.failed) || ps?.matches?.find((p) => !p.system);
+  if (part) {
+    const id = partId(part), st = glanceStock.id === id ? glanceStock.data : null;
+    const site2 = ticketSiteCode(r, lastResult.netbox);
+    let note = "";
+    if (st === "loading") note = "checking stock…";
+    else if (st?.ok) {
+      const here = st.rows.filter((x) => x.site === site2).reduce((n, x) => n + (x.onsite || 0), 0);
+      const all = st.rows.reduce((n, x) => n + (x.onsite || 0), 0);
+      note = here ? `${here} in stock at ${site2}` : all ? `none at ${site2 || "this site"}, ${all} elsewhere` : "no spares in NetBox";
+    }
+    rows.push({ icon: "🧰", key: part.failed ? "Failed part" : "Part", text: `${id} ${[part.vendor, part.name].filter(Boolean).join(" ")}`.slice(0, 90),
+      note, tone: st?.ok && !note.includes(" in stock at ") ? "warn" : "", jump: "parts" });
+  }
+  // Cautions (from the ticket): all of them, they're short
+  if (r.cautions.length) rows.push({ icon: "⚠️", key: r.cautions.length > 1 ? `${r.cautions.length} cautions` : "Caution", text: r.cautions.join(" · "), tone: "warn", jump: "cautions" });
+  // Next step: the first one not ticked, with a button to tick it
+  const checks = lastResult.checks || new Set();
+  const next = r.next_steps.findIndex((_, i) => !checks.has(i));
+  if (r.next_steps.length) {
+    const done = r.next_steps.filter((_, i) => checks.has(i)).length;
+    rows.push({ icon: "👉", key: next < 0 ? "All steps done" : `Next (${done}/${r.next_steps.length})`, text: next < 0 ? "" : r.next_steps[next].replace(/^caution:\s*/i, "⚠️ "),
+      tone: next < 0 ? "ok" : /^caution:/i.test(r.next_steps[next]) ? "warn" : "", jump: "steps",
+      action: next >= 0 && h("button", { class: "mini", title: "Tick this step", onclick: () => $("steps")?.querySelectorAll(".checklist input")[next]?.click() }, "✓ Done") });
+  }
+  return { rows, part };
+}
+
+async function updateGlance() {
+  const box = $("glance");
+  if (!box || !lastResult?.brief || lastResult.key !== current.key) return;
+  const { rows, part } = glanceRows();
+  const sig = JSON.stringify(rows.map(({ action, ...x }) => x));
+  if (sig !== glanceSig || !box.childElementCount) { glanceSig = sig; renderGlance(box, rows, jumpTo); }
+  // Spare stock for the part, looked up once (automatic: no click needed)
+  if (part && glanceStock.id !== partId(part)) {
+    const settings = await getSettings();
+    if (!settings.netboxEnabled) return;
+    const key = current.key, id = partId(part);
+    glanceStock = { id, data: "loading" };
+    const data = await netboxStockForPart(settings, part, ticketSiteCode(lastResult.brief, lastResult.netbox)).catch((e) => ({ ok: false, error: e.message }));
+    if (glanceStock.id === id && current.key === key) { glanceStock.data = data; updateGlance(); }
+  }
+}
 
 // ---------- Status, toast, people ----------
 
@@ -311,6 +397,7 @@ async function show(key, entry) {
   const checksKey = `checks:${key}`;
   const saved = (await chrome.storage.session.get(checksKey))[checksKey] || [];
   const checks = new Set(saved);
+  lastResult.checks = checks;
   renderBrief($("result"), entry.brief, {
     key,
     meta: entry.meta,

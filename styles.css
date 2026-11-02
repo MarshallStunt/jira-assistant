@@ -489,7 +489,7 @@ button:focus:not(:focus-visible) { outline: none; }
   color: var(--sec); font-size: 11.5px; letter-spacing: .05em;
 }
 #result .card:is(#request, #server, #bmcBox, #steps, #parts, #rmaBox, #history, #netboxBox, #confirm) > .label:first-child,
-#result details.card:is(#history, #netboxBox, #confirm) > summary .label { font-size: 12.5px; font-weight: 700; }
+#result details.card:is(#request, #server, #parts, #history, #netboxBox, #confirm) > summary .label { font-size: 12.5px; font-weight: 700; }
 #result .card.current { box-shadow: 0 0 0 1px var(--sec), 0 2px 10px color-mix(in srgb, var(--sec) 25%, transparent); }
 #rmaBox:empty { display: none; }
 
@@ -505,12 +505,35 @@ button:focus:not(:focus-visible) { outline: none; }
 
 /* Section header band: the top of each card is tinted in its colour, so cards don't all look the same. */
 #result .card:is(#request, #server, #bmcBox, #steps, #parts, #rmaBox, #history, #netboxBox, #confirm) > .label:first-child,
-#result details.card:is(#history, #netboxBox, #confirm) > summary {
+#result details.card:is(#request, #server, #parts, #history, #netboxBox, #confirm) > summary {
   margin: -10px -12px 10px -11px; padding: 8px 12px 8px 11px; border-radius: 0 7px 0 0;
   background: color-mix(in srgb, var(--sec) 12%, var(--card));
   border-bottom: 1px solid color-mix(in srgb, var(--sec) 30%, var(--border));
 }
-#result details.card:is(#history, #netboxBox, #confirm):not([open]) > summary { margin-bottom: -10px; border-bottom: 0; border-radius: 0 7px 7px 0; }
+#result details.card:is(#request, #server, #parts, #history, #netboxBox, #confirm):not([open]) > summary { margin-bottom: -10px; border-bottom: 0; border-radius: 0 7px 7px 0; }
 #result .card:is(#request, #server, #bmcBox, #steps, #parts, #rmaBox, #history, #netboxBox, #confirm) { margin-bottom: 12px; }
 .jump-link.done { border-style: dashed; }
 .jump-link.done:not(.active) { opacity: .75; }
+
+/* ---------- At a glance ----------
+   The one card to read: each row is one fact (job, where, live state, part & stock, cautions, next step);
+   tap a row for its section. */
+:root { --sec-glance: #5b3df5; }
+@media (prefers-color-scheme: dark) { :root { --sec-glance: #a796ff; } }
+#glance { --sec: var(--sec-glance); border: 1px solid color-mix(in srgb, var(--sec) 45%, var(--border)); border-left: 4px solid var(--sec); padding-left: 11px; }
+#glance:empty { display: none; }
+#glance > .label:first-child { margin: -10px -12px 6px -11px; padding: 8px 12px 8px 11px; border-radius: 0 7px 0 0; color: var(--sec); font-size: 12.5px; font-weight: 700;
+  background: color-mix(in srgb, var(--sec) 12%, var(--card)); border-bottom: 1px solid color-mix(in srgb, var(--sec) 30%, var(--border)); }
+.glance-rows { display: flex; flex-direction: column; }
+.glance-row { display: flex; align-items: flex-start; gap: 8px; padding: 6px 0; border-top: 1px solid var(--border); }
+.glance-row:first-child { border-top: 0; }
+.glance-icon { flex: none; width: 18px; text-align: center; line-height: 20px; }
+.glance-main { flex: 1; min-width: 0; display: block; text-align: left; border: 0; background: none; padding: 0; border-radius: 4px; color: var(--text); line-height: 1.4; }
+.glance-main:hover:not(:disabled) { background: color-mix(in srgb, var(--sec-glance) 8%, transparent); }
+.glance-k { font-weight: 700; margin-right: 6px; }
+.glance-v { overflow-wrap: anywhere; }
+.glance-note { display: block; font-size: 11.5px; color: var(--muted); }
+.glance-row.ok .glance-note, .glance-row.ok .glance-k { color: var(--ok); }
+.glance-row.warn .glance-k, .glance-row.warn .glance-note { color: var(--warn); }
+.glance-row.bad .glance-k, .glance-row.bad .glance-note { color: var(--danger); }
+.glance-row > button.mini { flex: none; margin-left: 0; align-self: center; }

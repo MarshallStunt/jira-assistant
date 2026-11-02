@@ -19,10 +19,16 @@ A side panel for Datacenter Operations. Open a Jira ticket and get a one-glance 
 ## The panel, top to bottom
 - **🆕 Update banner** when GitHub has a newer version (see *Updates* above).
 - **No ticket in this tab?** A start screen says to go to a Jira ticket tab, lists the tickets already open in your tabs (click one to go there), and reminds you to add an AI key if there isn't one.
-- **Header** (stays on screen): ticket key, **Re-analyze**, Settings, a progress line (✓ Ticket · ✓ AI brief · ✓ NetBox · ✕ Ping 1/2 up) and jump links (✅ Steps · 🔧 BMC · 🕘 History · 🗄️ NetBox).
+- **Header** (stays on screen): ticket key, **Re-analyze**, Settings, a progress line (✓ Ticket · ✓ AI brief · ✓ NetBox · ✕ Ping 1/2 up) and a jump bar with every section in its colour (📋 Request · 🖥️ Server · 🔧 BMC · ✅ Steps · 🧰 Parts · 🔁 RMA · 🕘 History · 🗄️ NetBox).
 - **Ticket strip**: job type, status, priority; 👤 assignee and 📝 reporter (click a name to message them on Slack).
 - **⏻ Power-down verdict**: ✓ OK · i Not needed · ! Confirm first · ✕ Do NOT, with reason and evidence. Without explicit approval in the ticket it never says OK.
-- **📋 Request** and **⚠️ Cautions**.
+- **⚡ At a glance**: the one card to read, filled from live systems first and the ticket only for the job. One line each:
+  - **🎯 Job** (from the ticket) · **📍 Where**: hostname, site, rack, RU from **NetBox** (marked *NetBox ✓*, or ⚠️ when it disagrees with the ticket)
+  - **📡 Live**: host and BMC up/down from ping, the BMC's power state and failed parts once health is read, "chassis most likely powered off"
+  - **🧰 Part**: the BMC's failed part or the best catalog match, with its spare stock at your site looked up automatically ("3 in stock at ORD01", or "none here, 12 elsewhere")
+  - **⚠️ Cautions** · **👉 Next**: the first step not done, with **✓ Done** to tick it
+  Tap a line to open its section.
+- **📋 Request**, **⚠️ Cautions**, **🖥️ Server & 📍 Location** and **🧰 Parts & tools** start folded (everything in them is summed up in *At a glance*); open any of them, and it stays open next time.
 - **🖥️ Server & 📍 Location**: hostnames (click to copy), site, row/rack/RU, any ticket-vs-NetBox mismatch, and **📡 Reachability** (ping of the ticket's and NetBox's IPs, with the network you go out on, e.g. `via utun4 (VPN)`). If the server doesn't answer ping (and its BMC does), it says the chassis is most likely already powered down; that note also goes into the Jira comment.
 - **🔧 BMC**: health, 🖥️ remote console and power control (below).
 - **✅ Next steps** checklist (risky steps in red; a Podcrawler rescan step is added for replacements) and **🧰 Parts & tools** with the parts catalog and stock (below).

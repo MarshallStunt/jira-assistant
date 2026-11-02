@@ -17,11 +17,13 @@ function h(tag, attrs = {}, ...children) {
 }
 
 // Collapsible card. Remembers whether you left it open (per section, on this computer).
+// title: "text" or ["text", "one-line gist shown in the header"].
 function fold(id, title, openByDefault, ...content) {
+  const [label, gist] = [title].flat();
   let saved = null;
   try { saved = localStorage.getItem(`fold:${id}`); } catch {}
   const d = h("details", { class: "card fold", id, open: (saved === null ? openByDefault : saved === "1") ? "" : null },
-    h("summary", {}, icon("chevron", 12), h("span", { class: "label" }, title)), ...content);
+    h("summary", {}, icon("chevron", 12), h("span", { class: "label" }, label), gist && h("span", { class: "fold-gist" }, gist)), ...content);
   d.addEventListener("toggle", () => { try { localStorage.setItem(`fold:${id}`, d.open ? "1" : "0"); } catch {} });
   return d;
 }
@@ -83,23 +85,28 @@ function renderBrief(root, r, opts) {
         r.power_down.evidence && h("div", { class: "power-evidence" }, `“${r.power_down.evidence.replace(/^["“”']+|["“”']+$/g, "")}”`))));
   }
 
+  // At a glance: the job, where, live state, the part and the next step (filled in by sidepanel.js → updateGlance).
+  root.appendChild(h("section", { class: "card glance", id: "glance" }));
+
   // 3. What to do
   if (r.request_summary || r.current_status) {
-    root.appendChild(h("section", { class: "card", id: "request" }, h("div", { class: "label" }, "📋 Request"),
+    root.appendChild(fold("request", "📋 Request", false,
       r.request_summary && h("p", { class: "lead" }, r.request_summary),
       r.current_status && h("p", { class: "status-line" }, h("b", {}, "Now: "), r.current_status)));
   }
   if (r.cautions.length) {
-    root.appendChild(h("section", { class: "card caution" },
-      h("div", { class: "label" }, "⚠️ Cautions"),
-      h("ul", {}, r.cautions.map((c) => h("li", {}, c)))));
+    // All of them are also in "At a glance", so the card starts folded.
+    const card = fold("cautions", ["⚠️ Cautions", `${r.cautions.length}`], false, h("ul", {}, r.cautions.map((c) => h("li", {}, c))));
+    card.classList.add("caution");
+    root.appendChild(card);
   }
 
   // 4. Where: server, location, reachability (+ NetBox disagreements, filled in later)
   const loc = r.location;
   const site = splitSite(loc.site);
   const small = [["Row", loc.row], ["Rack", loc.rack], ["RU", loc.unit]].filter(([, v]) => v);
-  root.appendChild(h("section", { class: "card where", id: "server" },
+  const where = [r.server_names[0], site.code, loc.rack && `rack ${loc.rack}`, loc.unit && `RU ${loc.unit}`].filter(Boolean).join(" · ");
+  root.appendChild(fold("server", ["🖥️ Server & location", where], false,
     h("div", { class: "label" }, "🖥️ Server"),
     h("div", { class: "chips" },
       r.server_names.length ? r.server_names.map((n) => copyChip(n)) : h("span", { class: "muted" }, "Not found in ticket")),
@@ -140,8 +147,7 @@ function renderBrief(root, r, opts) {
       }))));
   }
   // Parts: what the AI read in the ticket, plus matches from the Lambda parts catalog (filled in later).
-  root.appendChild(h("section", { class: "card", id: "parts" },
-    h("div", { class: "label" }, "🧰 Parts & tools"),
+  root.appendChild(fold("parts", ["🧰 Parts & tools", r.parts_tools.slice(0, 2).join(", ")], false,
     r.parts_tools.length ? h("div", { class: "chips" }, r.parts_tools.map((t) => h("span", { class: "chip" }, t))) : null,
     h("div", { id: "catalogBox" })));
   root.appendChild(h("section", { class: "card", id: "rmaBox" }));
@@ -348,4 +354,16 @@ function renderNetbox(box, state, actions) {
     box.appendChild(dev);
   }
   box.appendChild(h("div", { class: "nb-foot muted" }, `Checked ${timeAgo(nb.at)}`));
+}
+
+// The "At a glance" card. rows: [{ icon, key, text, note, tone: "ok" | "warn" | "bad" | "", jump: section id, action: button }]
+function renderGlance(box, rows, onJump) {
+  if (!box) return;
+  box.replaceChildren(h("div", { class: "label" }, "⚡ At a glance"),
+    h("div", { class: "glance-rows" }, rows.map((r) => h("div", { class: `glance-row ${r.tone || ""}` },
+      h("span", { class: "glance-icon" }, r.icon),
+      h("button", { class: "glance-main", type: "button", title: r.jump ? "Show the details" : null, onclick: () => r.jump && onJump(r.jump) },
+        h("span", { class: "glance-k" }, r.key), h("span", { class: "glance-v" }, r.text),
+        r.note && h("span", { class: "glance-note" }, r.note)),
+      r.action || null))));
 }
