@@ -275,6 +275,53 @@
       <div class="hint">Added to every prompt and take priority over the built-in behaviour. The power-down safety check always stays on: “OK to power down” still requires evidence in the ticket.</div>
     </div>
 
+    <h2 data-tab="look">Theme</h2>
+    <div class="hint look-note">Changes apply right away, here and in the side panel. No need to click Save.</div>
+
+    <div class="field">
+      <label>Mode</label>
+      <div class="look-seg" role="radiogroup"><label><input type="radio" name="theme" value="system" data-look="theme"><span>💻 Same as my computer</span></label><label><input type="radio" name="theme" value="light" data-look="theme"><span>☀️ Light</span></label><label><input type="radio" name="theme" value="dark" data-look="theme"><span>🌙 Dark</span></label></div>
+    </div>
+
+    <div class="field">
+      <label>Accent colour</label>
+      <div class="look-swatches" role="radiogroup"><label title="Lambda purple"><input type="radio" name="accent" value="lambda" data-look="accent"><span class="swatch" style="--sw:#5b3df5"></span><span>Lambda purple</span></label><label title="Blue"><input type="radio" name="accent" value="blue" data-look="accent"><span class="swatch" style="--sw:#0c66e4"></span><span>Blue</span></label><label title="Teal"><input type="radio" name="accent" value="teal" data-look="accent"><span class="swatch" style="--sw:#1d7f8c"></span><span>Teal</span></label><label title="Green"><input type="radio" name="accent" value="green" data-look="accent"><span class="swatch" style="--sw:#1f845a"></span><span>Green</span></label><label title="Orange"><input type="radio" name="accent" value="orange" data-look="accent"><span class="swatch" style="--sw:#c25100"></span><span>Orange</span></label><label title="Pink"><input type="radio" name="accent" value="pink" data-look="accent"><span class="swatch" style="--sw:#ae4787"></span><span>Pink</span></label><label title="Graphite"><input type="radio" name="accent" value="graphite" data-look="accent"><span class="swatch" style="--sw:#44546f"></span><span>Graphite</span></label></div>
+      <div class="hint">Buttons, links, the active tab and the "At a glance" card.</div>
+    </div>
+
+    <div class="field">
+      <label>Section colours</label>
+      <div class="look-seg" role="radiogroup"><label><input type="radio" name="sectionColors" value="colorful" data-look="sectionColors"><span>🎨 Each section its own colour</span></label><label><input type="radio" name="sectionColors" value="plain" data-look="sectionColors"><span>One colour (the accent)</span></label></div>
+      <div class="hint">Colourful: Request blue, Server teal, BMC purple, Steps green, Parts orange, RMA pink… so you can tell where you are.</div>
+    </div>
+
+    <h2 data-tab="look">Layout</h2>
+
+    <div class="field">
+      <label>The brief</label>
+      <div class="look-cards" role="radiogroup">
+        <label><input type="radio" name="layout" value="glance" data-look="layout"><span><b>⚡ At a glance first</b> (recommended)<br><span class="muted">One summary card on top; Request, Server, Parts and Cautions start folded.</span></span></label>
+        <label><input type="radio" name="layout" value="open" data-look="layout"><span><b>📖 Everything open</b><br><span class="muted">The summary card and every section open.</span></span></label>
+        <label><input type="radio" name="layout" value="classic" data-look="layout"><span><b>📜 Classic</b><br><span class="muted">No summary card; every section open, like before 1.31.</span></span></label>
+      </div>
+    </div>
+
+    <div class="field">
+      <label>Density</label>
+      <div class="look-seg" role="radiogroup"><label><input type="radio" name="density" value="comfortable" data-look="density"><span>Comfortable</span></label><label><input type="radio" name="density" value="compact" data-look="density"><span>Compact (more on screen)</span></label></div>
+    </div>
+
+    <div class="field">
+      <label>Text size</label>
+      <div class="look-seg" role="radiogroup"><label><input type="radio" name="textSize" value="small" data-look="textSize"><span>Small</span></label><label><input type="radio" name="textSize" value="normal" data-look="textSize"><span>Normal</span></label><label><input type="radio" name="textSize" value="large" data-look="textSize"><span>Large</span></label></div>
+    </div>
+
+    <div class="field">
+      <label><input type="checkbox" id="jumpBar" data-look="jumpBar"> Show the jump bar (section chips under the header)</label>
+    </div>
+
+    <div class="field"><button id="lookReset" type="button">↺ Back to the default look</button></div>
+
     <div class="row save-bar">
       <button id="save" class="primary" type="button">Save</button>
       <span id="msg" class="muted" style="align-self:center"></span>

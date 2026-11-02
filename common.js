@@ -42,8 +42,42 @@ const DEFAULTS = {
   podcrawlerStep: true, // add a "rescan in Podcrawler" step to replacement tickets
   // Lambda parts catalog (Google Sheet shared by link): Lambda P/N ↔ manufacturer P/N ↔ description
   catalogUrl: "https://docs.google.com/spreadsheets/d/1HkdgvcwHJ-HuDR90mmsVTNbuUqEtjRmYWpKF5hgCDAY/edit#gid=613788530",
-  slackIn: "browser"   // clicking a name opens the chat in Slack in Chrome ("browser") or just opens the desktop app ("app")
+  slackIn: "browser",  // clicking a name opens the chat in Slack in Chrome ("browser") or just opens the desktop app ("app")
+  // Appearance (Settings → Appearance; applied right away, see applyLook)
+  theme: "system",     // system | light | dark
+  accent: "lambda",    // lambda | blue | teal | green | orange | pink | graphite
+  sectionColors: "colorful", // colorful (each section its own colour) | plain (all in the accent colour)
+  layout: "glance",    // glance (At a glance + details folded) | open (everything open) | classic (no At a glance, everything open)
+  density: "comfortable", // comfortable | compact
+  textSize: "normal",  // small | normal | large
+  jumpBar: true        // the row of section chips under the header
 };
+
+// ---------- Appearance ----------
+// Theme, colours and layout as data-* attributes on <html> (styles.css → Appearance). Also kept in localStorage
+// so the page starts in the right theme before chrome.storage answers, and re-applied when Settings change.
+const LOOK_KEYS = ["theme", "accent", "sectionColors", "layout", "density", "textSize", "jumpBar"];
+
+function applyLook(s) {
+  const d = document.documentElement.dataset;
+  const set = (k, v) => (v ? (d[k] = v) : delete d[k]);
+  set("theme", s.theme === "system" ? "" : s.theme);
+  set("accent", s.accent === "lambda" ? "" : s.accent);
+  set("sections", s.sectionColors === "plain" ? "plain" : "");
+  set("layout", s.layout);
+  set("density", s.density === "compact" ? "compact" : "");
+  set("text", s.textSize === "normal" ? "" : s.textSize);
+  set("jump", s.jumpBar === false ? "off" : "");
+  try { localStorage.setItem("look", JSON.stringify(Object.fromEntries(LOOK_KEYS.map((k) => [k, s[k]])))); } catch {}
+  if (["open", "classic"].includes(s.layout)) document.querySelectorAll("#result details.fold").forEach((x) => (x.open = true));
+}
+
+if (typeof document !== "undefined") {
+  try { applyLook({ ...DEFAULTS, ...JSON.parse(localStorage.getItem("look") || "{}") }); } catch {}
+  const load = () => chrome.storage.local.get(LOOK_KEYS).then((st) => applyLook({ ...DEFAULTS, ...st }));
+  load();
+  chrome.storage.onChanged.addListener((ch, area) => { if (area === "local" && LOOK_KEYS.some((k) => k in ch)) load(); });
+}
 
 async function getSettings() {
   const stored = await chrome.storage.local.get([...Object.keys(DEFAULTS), "apiKey", "model"]);

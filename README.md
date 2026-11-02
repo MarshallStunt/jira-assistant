@@ -101,11 +101,14 @@ Click a name to open your Slack chat with that person, ready to type. With Slack
 Settings → **Privacy**: before anything is sent to the AI, names, emails, phone numbers, IP/MAC addresses, serials and your own words (e.g. customer names) become placeholders like `[IP-1]`; the real values are put back on your computer. Passwords, tokens and API keys in tickets are always removed. The footer shows 🔒 how many were hidden.
 
 ## Settings
-Four tabs, Save always at the bottom:
+Five tabs, Save always at the bottom:
 - **Start**: getting started, **updates**, AI provider, key, model (**Test AI** sends a one-line question with your key and model and shows the answer and how long it took), response speed, and **back up / load settings** (a JSON file; API keys and the NetBox token only if you tick the box, so a file can be shared with the team).
 - **Servers & BMC**: ping helper, BMC username and web address, NetBox & Podcrawler, parts catalog link.
 - **Privacy**: privacy mode.
 - **Jira & AI**: self-hosted Jira hosts, server/location fields, people (Slack app or browser), team context and custom AI instructions.
+- **Appearance** (applies right away, no Save needed; **↺ Back to the default look** undoes it):
+  - **Theme**: same as my computer, light or dark · **accent colour** (Lambda purple, blue, teal, green, orange, pink, graphite) · **section colours**: each its own, or all in the accent.
+  - **Layout**: **⚡ At a glance first** (default: summary card on top, details folded) · **📖 Everything open** · **📜 Classic** (no summary card, all open) · **density** comfortable or compact · **text size** small, normal or large · **jump bar** on or off.
 
 ## Setup details
 

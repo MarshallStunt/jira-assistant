@@ -22,7 +22,8 @@ function fold(id, title, openByDefault, ...content) {
   const [label, gist] = [title].flat();
   let saved = null;
   try { saved = localStorage.getItem(`fold:${id}`); } catch {}
-  const d = h("details", { class: "card fold", id, open: (saved === null ? openByDefault : saved === "1") ? "" : null },
+  const allOpen = ["open", "classic"].includes(document.documentElement.dataset.layout); // Settings → Appearance → Layout
+  const d = h("details", { class: "card fold", id, open: allOpen || (saved === null ? openByDefault : saved === "1") ? "" : null },
     h("summary", {}, icon("chevron", 12), h("span", { class: "label" }, label), gist && h("span", { class: "fold-gist" }, gist)), ...content);
   d.addEventListener("toggle", () => { try { localStorage.setItem(`fold:${id}`, d.open ? "1" : "0"); } catch {} });
   return d;

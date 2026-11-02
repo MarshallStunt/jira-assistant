@@ -324,7 +324,7 @@ $("testHelper").addEventListener("click", async () => {
 // ---------- Tabs ----------
 // Each section heading says which tab it belongs to (data-tab); everything after it, up to the next
 // heading, goes in the same tab. The Save bar stays visible on every tab.
-const TABS = [["start", "Start"], ["servers", "Servers & BMC"], ["privacy", "Privacy"], ["jira", "Jira & AI"]];
+const TABS = [["start", "Start"], ["servers", "Servers & BMC"], ["privacy", "Privacy"], ["jira", "Jira & AI"], ["look", "Appearance"]];
 
 function setupTabs() {
   let group = null;
@@ -395,3 +395,22 @@ $("testNetbox").addEventListener("click", async () => {
 
 // The heading's id differs from #updates, so the browser doesn't jump there before the tabs hide other sections.
 load().then(() => location.hash === "#updates" && $("updatesHead").scrollIntoView({ block: "start" }));
+
+// ---------- Appearance ----------
+// Saved as soon as you change it (no Save click); common.js applies it to every open page.
+async function fillLook() {
+  const s = await getSettings();
+  for (const el of document.querySelectorAll("[data-look]")) {
+    const k = el.dataset.look;
+    if (el.type === "checkbox") el.checked = s[k] !== false;
+    else el.checked = el.value === s[k];
+  }
+}
+for (const el of document.querySelectorAll("[data-look]")) {
+  el.addEventListener("change", () => chrome.storage.local.set({ [el.dataset.look]: el.type === "checkbox" ? el.checked : el.value }));
+}
+$("lookReset").addEventListener("click", async () => {
+  await chrome.storage.local.set(Object.fromEntries(LOOK_KEYS.map((k) => [k, DEFAULTS[k]])));
+  fillLook();
+});
+fillLook();
