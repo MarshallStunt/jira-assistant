@@ -191,22 +191,45 @@ function renderSteps() {
 }
 
 // ---------- Jump links ----------
-const JUMPS = [["✅ Steps", () => $("steps")], ["🔧 BMC", () => $("bmcBox")], ["🕘 History", () => $("history")], ["🗄️ NetBox", () => $("netboxBox")]];
+// Every section of the brief, in page order; each has its own colour (styles.css → section colours).
+const JUMPS = [["📋 Request", "request"], ["🖥️ Server", "server"], ["🔧 BMC", "bmcBox"], ["✅ Steps", "steps"], ["🧰 Parts", "parts"],
+  ["🔁 RMA", "rmaBox"], ["🕘 History", "history"], ["🗄️ NetBox", "netboxBox"]];
 
 function updateJump() {
   const nav = $("jump");
   const visible = !$("result").classList.contains("hidden");
-  const items = JUMPS.filter(([, el]) => visible && el() && !el().classList.contains("hidden"));
+  const items = JUMPS.filter(([, id]) => visible && $(id) && !$(id).classList.contains("hidden") && $(id).childElementCount);
   nav.classList.toggle("hidden", items.length < 2);
-  nav.replaceChildren(...items.map(([label, el]) => h("button", { class: "jump-link", onclick: () => {
-    const target = el();
-    if (target.tagName === "DETAILS") target.open = true;
-    target.scrollIntoView({ behavior: "smooth", block: "start" });
-  } }, label)));
+  const shown = [...nav.children].map((b) => b.dataset.for).join();
+  if (shown !== items.map(([, id]) => id).join()) {
+    nav.replaceChildren(...items.map(([label, id]) => h("button", { class: "jump-link", "data-for": id, onclick: () => {
+      const target = $(id);
+      if (target.tagName === "DETAILS") target.open = true;
+      target.scrollIntoView({ behavior: "smooth", block: "start" });
+    } }, label)));
+  }
+  markCurrent();
 }
 let jumpFrame;
 new MutationObserver(() => { cancelAnimationFrame(jumpFrame); jumpFrame = requestAnimationFrame(updateJump); })
   .observe($("result"), { childList: true, subtree: true, attributes: true, attributeFilter: ["class"] });
+
+// You are here: the section you're reading is lit up, in the jump bar and on the page.
+function markCurrent() {
+  const nav = $("jump"), bar = document.querySelector(".bar").getBoundingClientRect().bottom;
+  const line = bar + (innerHeight - bar) * 0.35; // the section crossing a third of the way down is the one you're reading
+  const ids = [...nav.children].map((b) => b.dataset.for);
+  let current = ids[0];
+  for (const id of ids) if ($(id).getBoundingClientRect().top <= line) current = id;
+  for (const b of nav.children) {
+    const on = b.dataset.for === current;
+    if (on && !b.classList.contains("active")) b.scrollIntoView({ block: "nearest", inline: "nearest" });
+    b.classList.toggle("active", on);
+  }
+  for (const [, id] of JUMPS) $(id)?.classList.toggle("current", id === current && ids.length > 1);
+}
+let spyFrame;
+addEventListener("scroll", () => { cancelAnimationFrame(spyFrame); spyFrame = requestAnimationFrame(markCurrent); }, { passive: true });
 
 // ---------- Status, toast, people ----------
 
@@ -454,11 +477,19 @@ async function setupRma(key, entry) {
   // Pre-filled values and where they came from (shown next to each field until the user edits it).
   const suggest = (k, value, source, { replace = false } = {}) => {
     if (!value || state.touched.has(k)) return false;
+    if ((k === "oldSn" && cleanSn(value) === state.form.newSn) || (k === "newSn" && cleanSn(value) === state.form.oldSn)) return false; // one part can't be both
     if (state.form[k] && !replace && !/guess|default/.test(state.sources[k] || "")) return false; // keep the stronger source
     state.form[k] = value;
     state.sources[k] = source;
     return true;
   };
+  // The existing RMA ticket (the one you add to) already has this swap: the old and the new S/N in the same comment
+  // (or in its description, or its S/N fields). With only one of them known, that one anywhere on it.
+  const onRma = (oldSn, newSn = "") => {
+    const r = state.existing?.find((x) => x.key === state.target), want = [oldSn, newSn].map(normPn).filter(Boolean);
+    return !!(r && want.length && (r.blocks || []).some((b) => want.every((n) => b.includes(n))));
+  };
+  const swapText = (o, n) => [o && `old ${o}`, n && `new ${n}`].filter(Boolean).join(" → ");
   const bmcProblems = () => Object.values(lastResult?.key === key ? lastResult.bmc || {} : {}).filter((x) => x?.ok).flatMap((x) => x.problems);
   const usePart = (p, source) => {
     for (const k of ["lambda", "mpn", "component"]) if (!state.touched.has(k)) { delete state.form[k]; delete state.sources[k]; }
@@ -470,17 +501,22 @@ async function setupRma(key, entry) {
     // The failed part the BMC reports: its own serial is the old S/N (helper 1.6.2+), its part number the MPN.
     const kind = /^206|^204/.test(p?.lambda || "") ? /gpu|processor/i : /^207/.test(p?.lambda || "") ? /memory|dimm/i : /^20[89]/.test(p?.lambda || "") ? /storage|drive/i : null;
     const probs = bmcProblems();
-    const prob = probs.find((x) => kind?.test(`${x.component} ${x.name}`) && x.serial) || (probs.length === 1 ? probs[0] : null);
+    const fresh = probs.filter((x) => !x.serial || !onRma(x.serial)); // a failed part already on the RMA is done
+    for (const x of probs) if (x.serial && onRma(x.serial)) state.skippedSn?.add(swapText(cleanSn(x.serial), ""));
+    const prob = fresh.find((x) => kind?.test(`${x.component} ${x.name}`) && x.serial) || (probs.length === 1 ? fresh[0] : null);
     if (prob?.serial) suggest("oldSn", cleanSn(prob.serial), `from BMC (${prob.name})`, { replace: /BMC/.test(state.sources.oldSn || "") });
     if (prob?.part_number) suggest("mpn", prob.part_number, `from BMC (${prob.name})`);
   };
   // The failed part's description: the BMC's model for it, or the brief's parts list, whichever matches the catalog best.
-  const seedDescription = () => {
-    const texts = [...bmcProblems().map((x) => x.detail).filter((d) => /[a-z]{2,}.*\s/i.test(d || "")), ...entry.brief.parts_tools];
+  // Lines of the comment with the swap's serials count a little more: that's where the tech names the part.
+  const seedDescription = (swapText = "") => {
+    const swapLines = swapText.split(/\n|(?<=[.;])\s+/).map((l) => l.replace(/^- \[[^\]]*\] [^:]+:\s*/, "").trim()).filter((l) => l.length >= 6 && l.length <= 160);
+    const texts = [...swapLines.map((t) => [t, 0.1]), ...bmcProblems().map((x) => x.detail).filter((d) => /[a-z]{2,}.*\s/i.test(d || "")).map((t) => [t, 0]),
+      ...entry.brief.parts_tools.map((t) => [t, 0])];
     let best = "", top = 0;
-    for (const t of texts) {
+    for (const [t, bonus] of texts) {
       const m = catalogByDescription(catalog(), t, 1)[0];
-      if (m && m.score > top) { best = t; top = m.score; }
+      if (m && m.score + bonus > top) { best = t; top = m.score + bonus; }
     }
     return best;
   };
@@ -603,12 +639,17 @@ async function setupRma(key, entry) {
       // The AI describes the part; the catalog decides the P/N (only on an exact description match).
       if (!state.form.lambda && suggest("partDesc", r.part_description, AI)) { filled++; autoFromDescription("catalog: exact description (AI)"); }
       filled += suggest("mpn", r.mpn, AI);
-      if (serialIn(r.old_sn, sourceText)) filled += suggest("oldSn", cleanSn(r.old_sn), AI);
-      if (serialIn(r.new_sn, sourceText)) filled += suggest("newSn", cleanSn(r.new_sn), AI);
+      const aiOld = serialIn(r.old_sn, sourceText) ? cleanSn(r.old_sn) : "", aiNew = serialIn(r.new_sn, sourceText) ? cleanSn(r.new_sn) : "";
+      if ((aiOld || aiNew) && onRma(aiOld, aiNew)) state.skippedSn.add(swapText(aiOld, aiNew));
+      else {
+        filled += suggest("oldSn", aiOld, AI);
+        filled += suggest("newSn", aiNew, AI);
+      }
       if (opts("component").includes(r.component)) filled += suggest("component", r.component, AI);
       if (opts("rmaType").includes(r.rma_type)) filled += suggest("rmaType", r.rma_type, AI);
       if (String(r.description || "").trim().length > 15) filled += suggest("description", r.description.trim(), AI, { replace: !state.touched.has("description") });
       crossFill();
+      rmaSerialNote();
       note = filled ? `✨ The AI filled in or improved ${filled} field${filled === 1 ? "" : "s"}. Check them.` : "✨ The AI found nothing more to fill in.";
     } catch (e) {
       if (run !== aiRun) return;
@@ -616,6 +657,16 @@ async function setupRma(key, entry) {
     }
     Object.assign(state, { aiBusy: false, aiNote: note });
     if (state.step === "form") draw();
+  };
+
+  // Serials skipped because the RMA already has them, and what's left to add.
+  const rmaSerialNote = () => {
+    const skipped = [...(state.skippedSn || [])];
+    if (!state.existing?.length || !skipped.length) return (state.rmaSnNote = "");
+    const proposed = state.form.oldSn || state.form.newSn;
+    state.rmaSnNote = proposed
+      ? `↪️ Skipped ${skipped.join("; ")}: already on ${state.target}. Proposing the next swap it doesn't have yet.`
+      : `✅ Every swap this ticket mentions (${skipped.join("; ")}) is already on ${state.target}. Nothing new to add, unless you swapped another part: enter its serials.`;
   };
 
   // The ticket already has an RMA ticket: add the part and serials to it as an internal comment.
@@ -645,10 +696,11 @@ async function setupRma(key, entry) {
       const meta = await jira("meta", { project: RMA_PROJECT, defaultKind: RMA_DEFAULT_KIND });
       if (!meta.ok) return Object.assign(state, { step: state.result ? "done" : "idle", error: `Couldn't read the RMA project: ${meta.error}` }) && draw();
       // An RMA ticket already open for this ticket: add to it instead of creating another.
-      const existing = await jira("existing", { key, rmaProject: RMA_PROJECT });
+      const snFields = [RMA_FIELD_NAMES.oldSn, RMA_FIELD_NAMES.newSn].map((n) => meta.fields[n]?.id);
+      const existing = await jira("existing", { key, rmaProject: RMA_PROJECT, snFields });
       if (!existing.ok) return Object.assign(state, { step: state.result ? "done" : "idle", error: `Couldn't check for an existing RMA: ${existing.error}` }) && draw();
       Object.assign(state, { meta, existing: existing.rmas, target: existing.rmas[0]?.key, choices: choices(), form: {}, sources: {}, touched: new Set(), aiNote: "",
-        pinned: [], historyCount: {}, historyModel: "", serialNote: "" });
+        pinned: [], historyCount: {}, historyModel: "", serialNote: "", rmaSnNote: "", skippedSn: new Set() });
       const first = state.choices[0];
       state.catalog = catalog();
       state.form.kind = meta.defaultKind;
@@ -659,24 +711,35 @@ async function setupRma(key, entry) {
       // The server's hostname for the summary ("ord01-cl01-hgx-0084 - replace …"): a server name, not a serial.
       state.form.hostname = entry.brief.server_names.find((n) => /[a-z].*[-.].*\d|\d.*[-.].*[a-z]/i.test(n) && /-/.test(n)) || "";
       state.warnings = [];
+      // The swaps the ticket names (old and new S/N from the same comment); with an RMA already open, the first one it doesn't have yet.
+      const swaps = ticketSwaps(entry.issueText);
+      const swap = swaps.find((x) => !onRma(x.oldSn, x.newSn)) || {};
+      for (const x of swaps) if (onRma(x.oldSn, x.newSn)) state.skippedSn.add(swapText(x.oldSn, x.newSn));
+      // Catalog parts the whole ticket names (by number or description), those in the swap's comment first: listed at the top.
+      const named = ticketCatalogParts(catalog(), entry.issueText, swap.text).filter((m) => !serverMismatch(state.serverText, m.part));
+      state.pinned.push(...named.map((m) => ({ part: m.part, tags: m.tags })));
+      const byNumber = named.filter((m) => m.byNumber);
       if (first) usePart(first, first._src);
-      else {
-        suggest("partDesc", seedDescription(), "from ticket/BMC");
+      else if (byNumber.length === 1 || (byNumber.length > 1 && byNumber[0].score > byNumber[1].score)) {
+        usePart(byNumber[0].part, `catalog: ${byNumber[0].tags[0].replace(/^P\/N named/, "P/N")}`);
+      } else {
+        suggest("partDesc", seedDescription(swap.text || ""), "from ticket/BMC");
         autoFromDescription("catalog: exact description");
       }
       // These don't depend on the exact P/N: the BMC's failed part gives the old S/N, the description the component.
-      const probs = bmcProblems().filter((x) => x.serial);
+      const probs = bmcProblems().filter((x) => x.serial && !onRma(x.serial));
       if (probs.length === 1) suggest("oldSn", cleanSn(probs[0].serial), `from BMC (${probs[0].name})`);
-      suggest("component", guessComponent(state.meta.fields[RMA_FIELD_NAMES.component]?.options || [], { name: state.form.partDesc }, entry.issueText || ""), "guessed");
+      suggest("component", guessComponent(state.meta.fields[RMA_FIELD_NAMES.component]?.options || [], { name: state.form.partDesc || swap.text || "" }, entry.issueText || ""), "guessed");
       crossFill();
       suggest("description", failure(), "from ticket & BMC");
-      const inTicket = serialsInText(entry.issueText);
-      suggest("oldSn", inTicket.oldSn, "from ticket");
-      suggest("newSn", inTicket.newSn, "from ticket");
+      const inTicket = swap, from = swap.who ? `from ${swap.who}'s comment${swap.when ? ` (${swap.when.slice(0, 10)})` : ""}` : "from ticket";
+      suggest("oldSn", inTicket.oldSn, from);
+      suggest("newSn", inTicket.newSn, from);
       // The ticket and the BMC disagree about the old S/N: say so instead of silently picking one.
       if (inTicket.oldSn && state.form.oldSn && inTicket.oldSn !== state.form.oldSn) {
         state.warnings.push(`The ticket mentions old S/N ${inTicket.oldSn}, but the BMC reports ${state.form.oldSn}. Check the label on the part you removed.`);
       }
+      rmaSerialNote();
       state.step = "form";
       draw();
       verifySerials();
@@ -684,7 +747,7 @@ async function setupRma(key, entry) {
       aiPrefill();
     },
     onSerial: () => { clearTimeout(state.serialTimer); state.serialTimer = setTimeout(verifySerials, 700); },
-    onComponent: () => loadHistory(),
+    onComponent: () => { draw(); loadHistory(); }, // the list may now show this component's catalog parts
     onPickPart: (p, src) => {
       for (const k of ["lambda", "mpn"]) { state.touched.delete(k); delete state.form[k]; delete state.sources[k]; }
       state.warnings = state.warnings.filter((w) => !/same description/.test(w));
@@ -696,7 +759,7 @@ async function setupRma(key, entry) {
     onReset: async () => {
       aiRun++;
       Object.assign(state, { step: "idle", error: "", progress: [], problems: [], warnings: [], form: {}, sources: {}, touched: new Set(),
-        existing: null, target: null, aiBusy: false, aiNote: "", result: null, pinned: [], historyCount: {}, historyModel: "", serialNote: "" });
+        existing: null, target: null, aiBusy: false, aiNote: "", result: null, pinned: [], historyCount: {}, historyModel: "", serialNote: "", rmaSnNote: "", skippedSn: new Set() });
       await chrome.storage.session.remove(store);
       if (lastResult?.key === key) lastResult.rma = null;
       draw();
@@ -706,6 +769,12 @@ async function setupRma(key, entry) {
       const f = state.form;
       Object.assign(f, { lambda: String(f.lambda || "").trim(), mpn: String(f.mpn || "").trim(), oldSn: cleanSn(f.oldSn), newSn: cleanSn(f.newSn), description: String(f.description || "").trim() });
       state.problems = rmaProblems(f);
+      if (f.oldSn && f.oldSn === f.newSn) state.problems.push("The old and the new S/N are the same. The new one is on the part you installed.");
+      state.warnings = state.warnings.filter((w) => !/already on RMA|is on .* in another comment/.test(w));
+      if (state.existing?.length && f.oldSn && f.newSn && onRma(f.oldSn, f.newSn)) state.problems.push(`This swap (${swapText(f.oldSn, f.newSn)}) is already on ${state.target}.`);
+      else if (state.existing?.length) for (const [label, sn] of [["old", f.oldSn], ["new", f.newSn]]) {
+        if (onRma(sn)) state.warnings.push(`The ${label} S/N ${sn} is on ${state.target} in another comment, without this ${label === "old" ? "new" : "old"} S/N. Check it's a different swap.`);
+      }
       if (!state.problems.length) aiRun++; // a late AI answer must not change values you're reviewing
       state.step = state.problems.length ? "form" : "review";
       state.aiBusy = false;

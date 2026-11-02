@@ -57,7 +57,7 @@ async function ensureLocalPermission(baseUrl) {
   if (!ok) throw new Error(`Chrome permission for ${origin} was denied.`);
 }
 
-// script: "setup" or "ping-helper/install" (.sh on Mac, .ps1 on Windows), run from the jira-assistant folder.
+// script: "setup" or "ping-helper/install" (.sh on Mac, .ps1 on Windows), run from the lambda-rackside folder.
 function setupCommand(script) {
   return folderCommand(`bash "$d/${script}.sh" ${chrome.runtime.id}`,
     `powershell -ExecutionPolicy Bypass -File "$d\\${script.replace("/", "\\")}.ps1" $id`);
@@ -221,7 +221,8 @@ $("save").addEventListener("click", async () => {
 // ---------- Backup & restore ----------
 // Settings as a JSON file. API keys and tokens are left out unless ticked, so a file can be shared with the team.
 
-const BACKUP_APP = "lambda-dc-ops-assistant"; // kept from the old name so older backup files still load
+const BACKUP_APP = "lambda-rackside";
+const OLD_BACKUP_APPS = ["lambda-dc-ops-assistant"]; // backup files saved by earlier versions
 const SECRET_SETTINGS = ["anthropicKey", "openaiKey", "geminiKey", "localApiKey", "netboxToken"];
 
 function backupMsg(text, bad = false) {
@@ -249,7 +250,7 @@ $("importFile").addEventListener("change", async (e) => {
   try {
     let data;
     try { data = JSON.parse(await file.text()); } catch { throw new Error("it isn't a settings file (not JSON)"); }
-    if (data?.app !== BACKUP_APP || typeof data.settings !== "object") throw new Error("it isn't a Rackside settings file");
+    if ((data?.app !== BACKUP_APP && !OLD_BACKUP_APPS.includes(data?.app)) || typeof data.settings !== "object") throw new Error("it isn't a Rackside settings file");
     // Only known settings, each the same type as its default. Settings not in the file keep their current value.
     const sameType = (a, b) => (Array.isArray(a) ? Array.isArray(b) : typeof a === typeof b && !Array.isArray(b) && b !== null);
     const valid = Object.fromEntries(Object.entries(data.settings).filter(([k, v]) => k in DEFAULTS && sameType(DEFAULTS[k], v)));

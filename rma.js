@@ -125,9 +125,25 @@ async function rmaJiraInPage(op, a) {
       }
       const rmas = [...keys].filter((k) => k.toUpperCase().startsWith(`${a.rmaProject.toUpperCase()}-`));
       const out = [];
+      const snFields = (a.snFields || []).filter(Boolean);
+      const strings = (v, acc = []) => {
+        if (typeof v === "string") acc.push(v);
+        else if (v && typeof v === "object") Object.values(v).forEach((x) => strings(x, acc));
+        return acc;
+      };
       for (const k of rmas.slice(0, 5)) {
-        const r = await call("GET", `/rest/api/3/issue/${encodeURIComponent(k)}?fields=summary,status`);
-        out.push({ key: r.key, summary: r.fields.summary, status: r.fields.status?.name || "" });
+        const r = await call("GET", `/rest/api/3/issue/${encodeURIComponent(k)}?fields=${["summary", "status", "description", "comment", ...snFields].join(",")}`);
+        // Every serial-like word on it (to skip serials it already has) and the ones in its S/N fields or "S/N: X" lines (to show).
+        // One block per comment, one for the summary and description, one for the S/N fields: a swap is on the RMA
+        // when its old and new S/N are in the same block.
+        const blockOf = (v) => [...new Set((strings(v).join("\n").toUpperCase().match(/[A-Z0-9][A-Z0-9-]{4,}/g) || [])
+          .map((t) => t.replace(/[^A-Z0-9]/g, "")).filter((t) => t.length >= 6 && /\d/.test(t)))];
+        const blocks = [blockOf([r.fields.summary, r.fields.description]), blockOf(snFields.map((f) => r.fields[f])),
+          ...(r.fields.comment?.comments || []).map((c) => blockOf(c.body))].filter((b) => b.length);
+        const text = strings([r.fields.summary, r.fields.description, r.fields.comment?.comments?.map((c) => c.body), snFields.map((f) => r.fields[f])]).join("\n");
+        const shown = new Set(snFields.flatMap((f) => strings(r.fields[f])).flatMap((v) => v.split(/[\s,;\/]+/)).map((v) => v.trim().toUpperCase()).filter((v) => v.length >= 6));
+        for (const m of text.matchAll(/\b(?:s\/?n|serial)\b[^:\n]{0,15}[:#]\s*([A-Z0-9][A-Z0-9-]{5,40})/gi)) shown.add(m[1].toUpperCase());
+        out.push({ key: r.key, summary: r.fields.summary, status: r.fields.status?.name || "", blocks, serials: [...shown] });
       }
       return { ok: true, rmas: out };
     }
@@ -153,7 +169,7 @@ async function rmaJira(tabId, op, args) {
 
 // Best guess for "Component Issue" from the part and the ticket ("GPU fell off the bus" → "GPU - FALLEN OF BUS").
 function guessComponent(options, part, ticketText) {
-  const text = `${part?.name || ""} ${part?.desc || ""} ${part?.lambda || ""} ${part?.legacy || ""}`.toLowerCase();
+  const text = (`${part?.name || ""} ${part?.desc || ""} ${part?.lambda || ""} ${part?.legacy || ""}`.trim() || String(ticketText || "").slice(0, 3000)).toLowerCase();
   const pick = (re) => options.find((o) => re.test(o));
   const pn = String(part?.lambda || "").slice(0, 3);
   if (/switch ?board|plx|pcie switch/.test(text)) return pick(/PCIE Switch/i); // "switch board for … SXM5 GPU system" isn't a GPU
@@ -253,6 +269,7 @@ function rmaCatalogPicker(state, actions) {
   if (!state.catalog) return null;
   const f = state.form;
   const list = h("div", { class: "rma-cands" });
+  const head = h("div", { class: "rma-cands-head" });
   const show = () => {
     // Parts confirmed by NetBox (serial) or used before on this server model come first, then description matches.
     const pinned = [];
@@ -261,12 +278,19 @@ function rmaCatalogPicker(state, actions) {
       if (same) same.tags.push(...x.tags.filter((t) => !same.tags.includes(t)));
       else pinned.push({ part: x.part, exact: false, sameAs: [], tags: [...x.tags] });
     }
-    const matches = [...pinned, ...catalogByDescription(state.catalog, f.partDesc).filter((m) => !pinned.some((x) => partId(x.part) === partId(m.part))).map((m) => ({ ...m, tags: [] }))];
+    let byDesc = catalogByDescription(state.catalog, f.partDesc), fallback = false;
+    // Nothing from the description (none found, only generic words, or no match): list the component's catalog parts.
+    if (!byDesc.length && f.component) {
+      byDesc = catalogByComponent(state.catalog, f.component, state.serverText, state.historyCount);
+      fallback = byDesc.length > 0;
+    }
+    const matches = [...pinned, ...byDesc.filter((m) => !pinned.some((x) => partId(x.part) === partId(m.part))).map((m) => ({ ...m, tags: [] }))];
     for (const m of matches) {
       const n = state.historyCount?.[partId(m.part)];
       if (n && !m.tags.some((t) => /^used/.test(t))) m.tags.push(`used ${n}× on ${state.historyModel}`);
       m.misfit = serverMismatch(state.serverText, m.part);
     }
+    matches.sort((a, b) => !!a.misfit - !!b.misfit); // parts that don't fit this server last
     list.replaceChildren(...(matches.length ? matches.map((m) => {
       const p = m.part, chosen = f.lambda && p.lambda === f.lambda;
       return h("button", { type: "button", class: `rma-cand${chosen ? " chosen" : ""}`, onclick: () => actions.onPickPart(p, "picked from the list") },
@@ -278,7 +302,12 @@ function rmaCatalogPicker(state, actions) {
         m.misfit && h("span", { class: "rma-tag bad" }, `doesn't fit this server: ${m.misfit}`),
         m.sameAs.length > 0 && h("span", { class: "rma-tag warn" }, `same description as ${m.sameAs.slice(0, 3).join(", ")}`),
         p.inactive && h("span", { class: "rma-tag warn" }, p.replacedBy ? `EOL → ${p.replacedBy}` : "EOL"));
-    }) : [h("div", { class: "muted" }, f.partDesc ? "No catalog part matches this description. Try fewer or other words." : "Describe the failed part to find it in the catalog.")]));
+    }) : [h("div", { class: "rma-nomatch" }, f.partDesc
+      ? "No catalog part matches this description. Try other words (e.g. “H100 SXM5”, “PCIe switch board”), its MPN or Lambda P/N, or pick the Component below."
+      : "Type the failed part's description, MPN or Lambda P/N above (e.g. “H100 SXM5”, “AOM-SXM5-IO-P”), or pick the Component below to list its parts.")]));
+    head.textContent = fallback ? `No exact description match: ${f.component} parts in the catalog that fit this server:`
+      : f.lambda ? "Matching parts in the catalog (the source of truth), best first:" : "👉 Choose the part you swapped from the catalog matches below (or refine the description):";
+    head.className = `rma-cands-head${f.lambda ? " muted" : " rma-choose"}`;
   };
   const box = h("input", { class: "bmc-in", type: "text", spellcheck: "false", value: f.partDesc || "", "data-key": "partDesc", placeholder: "e.g. NVIDIA H100 80GB SXM5" });
   const badge = rmaSource(state, "partDesc");
@@ -293,8 +322,7 @@ function rmaCatalogPicker(state, actions) {
   show();
   return h("div", { class: "rma-catalog" },
     h("label", { class: "rma-row" }, h("span", { class: "rma-k" }, "Part description"), box, badge),
-    f.lambda ? h("div", { class: "muted rma-cands-head" }, "Matching parts in the catalog (the source of truth), best first:")
-      : h("div", { class: "rma-cands-head rma-choose" }, "👉 Choose the part you swapped from the catalog matches below (or refine the description):"),
+    head,
     list);
 }
 
@@ -336,11 +364,13 @@ function rmaForm(state, actions) {
           radio.addEventListener("change", () => (state.target = r.key));
           return radio;
         })(),
-        h("b", {}, r.key), ` · ${r.status} · ${r.summary}`)),
+        h("b", {}, r.key), ` · ${r.status} · ${r.summary}`,
+        r.serials?.length ? h("div", { class: "muted mono" }, `Already on it: ${r.serials.join(", ")}`) : null)),
       h("div", {}, "No new RMA will be created: these details are added to it as an internal comment.")) : null,
     h("div", { class: "rma-note" }, `Pre-filled from the ticket, the BMC, the catalog and the AI. Check every value: you confirm them before anything is ${state.existing?.length ? "added" : "created"}.`),
     state.aiBusy && h("div", { class: "muted" }, h("span", { class: "spinner" }), "✨ Reading the ticket and BMC to fill in the rest…"),
     state.aiNote && h("div", { class: "muted rma-ainote" }, state.aiNote),
+    state.rmaSnNote && h("div", { class: "rma-serialnote" }, state.rmaSnNote),
     state.serialNote && h("div", { class: "rma-serialnote" }, state.serialNote),
     h("div", { class: "rma-sub" }, "Failed part"),
     pickers,
@@ -397,7 +427,7 @@ function rmaReview(state, actions) {
 // DDR5, 4800 vs 5600, SXM vs PCIe rule a part out. The same description can be listed under several P/Ns: shown together.
 
 // Words that say what kind of thing it is but that catalog entries often leave out ("ConnectX-7 400Gb" has no "NIC").
-const DESC_GENERIC = new Set(("gpu card module part parts unit units replacement new spare failed faulty bad the a an and for with of x pcs pc qty " +
+const DESC_GENERIC = new Set(("gpu card module system part parts unit units replacement new spare failed faulty bad the a an and for with of x pcs pc qty " +
   "nic adapter hca memory drive disk").split(" "));
 function descTokens(s) {
   const out = new Set();
@@ -423,6 +453,25 @@ function specConflict(q, pt) {
   }
   return false;
 }
+// The catalog parts for a "Component Issue": Lambda P/N family and/or words in the catalog entry.
+const COMPONENT_FAMILIES = [
+  [/GPU Baseboard/i, ["204"], /baseboard|hgx/i], [/^GPU/i, ["206"], /\b(h100|h200|b200|b300|a100|gpu)\b/i, /switch ?board|plx|baseboard|riser|cable|bracket/i], [/DIMM/i, ["207"], /dimm|ddr\d/i],
+  [/SSD|NVME/i, ["208", "209"], /ssd|nvme/i], [/^M\.2$/i, ["208", "209"], /m\.2/i], [/^PSU$/i, ["214"], /\bpsu\b|power supply/i],
+  [/NIC|HCA/i, ["211"], /connectx|\bnic\b|hca|bluefield/i, /switch ?board|plx|retimer/i], [/PCIE Switch/i, [], /switch ?board|plx|pcie switch/i],
+  [/Riser/i, ["217"], /riser/i], [/Motherboard/i, ["213"], /motherboard|mainboard|\bmbd\b/i], [/^CPU$/i, ["205"], /\b(cpu|xeon|epyc)\b/i],
+  [/^Fan$/i, [], /\bfan\b/i], [/Optic/i, ["238"], /transceiver|optic|osfp|qsfp/i], [/BackPlane/i, [], /backplane/i]
+];
+function catalogByComponent(catalog, component, serverText, historyCount = {}, limit = 8) {
+  const fam = COMPONENT_FAMILIES.find(([re]) => re.test(component || ""));
+  if (!catalog || !fam) return [];
+  const [, prefixes, words, not] = fam;
+  return catalog.parts
+    .filter((p) => !isWholeSystem(p) && (prefixes.includes(String(p.lambda).slice(0, 3)) || words.test(`${p.name} ${p.desc} ${p.mpn}`)) &&
+      !not?.test(`${p.name} ${p.desc}`) && !serverMismatch(serverText, p))
+    .sort((a, b) => (historyCount[partId(b)] || 0) - (historyCount[partId(a)] || 0) || !!a.inactive - !!b.inactive)
+    .slice(0, limit).map((p) => ({ part: p, score: 0, exact: false, sameAs: [] }));
+}
+
 // Does the part fit the server? A part made for another GPU (A100 parts in an H100 server) or another GPU socket
 // (SXM4 vs the H100's SXM5) doesn't. Returns why not, or "".
 const GPU_SOCKET = { a100: "sxm4", a800: "sxm4", h100: "sxm5", h200: "sxm5", h800: "sxm5", h20: "sxm5" };
@@ -439,19 +488,30 @@ function serverMismatch(serverText, part) {
 const descKey = (p) => [...descTokens(`${p.vendor} ${p.name} ${p.desc}`)].sort().join(" ");
 
 // Catalog parts whose description best matches `text`, best first: [{ part, score, exact, sameAs: [other P/Ns with that description] }].
+// Only words some catalog entry uses count ("Switch board is replaced" → switch, board), so a tech's sentence matches too.
+const catalogWords = new WeakMap();
+function partTokens(catalog) {
+  if (!catalogWords.has(catalog)) {
+    const tokens = new Map(catalog.parts.map((p) => [p, descTokens(`${p.vendor} ${p.name} ${p.desc} ${p.mpn} ${p.lambda} ${p.legacy}`)]));
+    catalogWords.set(catalog, { tokens, vocab: new Set([...tokens.values()].flatMap((t) => [...t])) });
+  }
+  return catalogWords.get(catalog);
+}
 function catalogByDescription(catalog, text, limit = 6) {
-  const q = descTokens(text);
-  if (!catalog || !q.size) return [];
+  if (!catalog) return [];
+  const { tokens, vocab } = partTokens(catalog);
+  const q = new Set([...descTokens(text)].filter((t) => vocab.has(t)));
+  if (!q.size) return [];
   const found = [];
   for (const p of catalog.parts) {
     if (isWholeSystem(p)) continue;
-    const pt = descTokens(`${p.vendor} ${p.name} ${p.desc} ${p.mpn}`);
+    const pt = tokens.get(p);
     const common = [...q].filter((t) => pt.has(t)).length;
     if (!common || specConflict(q, pt)) continue;
     const coverage = common / q.size;                 // how much of the description the part has
     const tight = common / pt.size;                   // prefer entries without much else
     const score = coverage + 0.15 * tight - (p.inactive ? 0.05 : 0) + (p.lambda ? 0.02 : 0);
-    if (coverage >= 0.5) found.push({ part: p, score, coverage, exact: coverage === 1 });
+    if (coverage >= 0.5) found.push({ part: p, score, coverage, common, exact: coverage === 1 });
   }
   found.sort((a, b) => b.score - a.score);
   const top = found.slice(0, limit);
@@ -466,16 +526,71 @@ function catalogByDescription(catalog, text, limit = 6) {
 
 // Serial numbers written in the ticket or its comments: "old SN: X", "replace GPU SN X", "new serial X", "installed SN X".
 function serialsInText(text) {
+  const { olds, news } = allSerialsInText(text);
+  return { oldSn: olds[0] || "", newSn: news[0] || "" };
+}
+// Every old and new serial the ticket names, in order ("GPU1 OLD: A New: B … GPU3 OLD: C New: D" → olds [A, C], news [B, D]).
+function allSerialsInText(text) {
   const t = String(text || "");
   // A serial, stopping before a following "New"/"Old" when the two run together ("OA242S018019New: …").
   const SN = "([A-Z0-9][A-Z0-9-]{5,40}?)(?=(?:new|old)\\b|[^A-Z0-9-]|$)";
   const grab = (words) => {
-    const withSn = t.match(new RegExp(`\\b(?:${words})\\b[^\\n]{0,30}?\\b(?:s\\/?n|serial(?: number)?)\\b[\\s:#=-]*${SN}`, "i"));
-    const withColon = t.match(new RegExp(`(?<![a-z])(?:${words})\\b\\s*(?:part\\s*)?[:=#]\\s*${SN}`, "i")); // "OLD: X", "…New: X"
-    return cleanSn((withSn || withColon || [])[1]);
+    const withSn = [...t.matchAll(new RegExp(`\\b(?:${words})\\b[^\\n]{0,30}?\\b(?:s\\/?n|serial(?: number)?)\\b[\\s:#=-]*${SN}`, "gi"))];
+    const withColon = [...t.matchAll(new RegExp(`(?<![a-z])(?:${words})\\b\\s*(?:part\\s*)?[:=#]\\s*${SN}`, "gi"))]; // "OLD: X", "…New: X"
+    const found = [...withSn, ...withColon].sort((a, b) => a.index - b.index).map((m) => cleanSn(m[1]));
+    return [...new Set(found)];
   };
   // "replace GPU SN X" (how DC tickets name the failed part) is the old one; "replacement SN X" the new one.
-  return { oldSn: grab("old|faulty|failed|bad|defective|removed|original|replace|replacing|swap|swapping"), newSn: grab("new|replacement|installed|good|spare") };
+  const olds = grab("old|faulty|failed|bad|defective|removed|original|replace|replacing|swap|swapping");
+  const news = grab("new|replacement(?! of)|installed|good|spare").filter((n) => !olds.includes(n)); // "requesting replacement of X (SN …)" is the failed part
+  return { olds: olds.filter((o) => !news.includes(o)), news };
+}
+
+// The ticket in blocks: its fields and description, then one block per comment or work log ("- [date] Name: …").
+function ticketBlocks(text) {
+  return String(text || "").split(/\n(?=- \[\d{4}-\d\d-\d\d[\d :]*\] )/).map((b) => {
+    const m = b.match(/^- \[([\d :-]+)\] ([^:(\n]+?)\s*(?:\([^)]*\))?:\s/);
+    return { who: m ? m[2].trim() : "", when: m ? m[1] : "", text: b };
+  }).filter((b) => b.text.trim());
+}
+
+// The swaps the ticket names: the old and the new S/N come from the same comment (the tech who swapped writes both),
+// paired in order there ("GPU1 OLD: A New: B, GPU3 OLD: C New: D"). Oldest comment first.
+function ticketSwaps(text) {
+  const out = [];
+  for (const b of ticketBlocks(text)) {
+    const { olds, news } = allSerialsInText(b.text);
+    const n = Math.max(olds.length, news.length);
+    for (let i = 0; i < n; i++) out.push({ oldSn: olds[i] || "", newSn: news[i] || "", who: b.who, when: b.when, text: b.text });
+  }
+  // A comment by the tech who swapped ("Old s/n: X / New s/n: Y") beats the description (which only names the failed part);
+  // complete pairs first.
+  const rank = (x) => (x.oldSn && x.newSn ? 0 : 2) + (x.who ? 0 : 1);
+  return out.filter((x) => x.oldSn !== x.newSn).sort((a, b) => rank(a) - rank(b));
+}
+
+// Catalog parts the whole ticket names, by number (Lambda P/N, SKU, MPN) or by description, for the RMA's part list.
+// Parts named in the comment with the serials (the swap) count most. Returns [{part, tags, score, byNumber}], best first.
+function ticketCatalogParts(catalog, text, swapText = "") {
+  if (!catalog) return [];
+  const found = new Map();
+  const add = (p, score, tag, byNumber) => {
+    if (!p || isWholeSystem(p)) return;
+    const id = partId(p), x = found.get(id) || { part: catalog.parts.find((q) => partId(q) === id) || p, tags: [], score: 0, byNumber: false };
+    x.score += score;
+    x.byNumber ||= byNumber;
+    if (!x.tags.includes(tag)) x.tags.push(tag);
+    found.set(id, x);
+  };
+  for (const [t, w, where] of [[swapText, 3, "in the swap comment"], [text, 1, "in the ticket"]]) {
+    if (!t) continue;
+    for (const p of findCatalogParts(catalog, [t])) add(p, 2 * w, `P/N named ${where}`, true);
+    // Short lines are where techs name the part; one shared word ("System powered off" vs "… GPU system") isn't enough. ("Replaced PCIe switch board"); long ones match everything.
+    for (const line of t.split(/\n|(?<=[.;])\s+/).map((l) => l.trim()).filter((l) => l.length >= 6 && l.length <= 160).slice(0, 400)) {
+      for (const m of catalogByDescription(catalog, line, 4)) if (m.coverage >= 0.66 && m.common >= 2) add(m.part, w * m.coverage, `described ${where}`, false);
+    }
+  }
+  return [...found.values()].sort((a, b) => b.byNumber - a.byNumber || b.score - a.score).slice(0, 8);
 }
 
 // A serial the AI suggests is only kept if it appears in the ticket or BMC data (no invented serials).

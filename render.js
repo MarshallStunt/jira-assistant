@@ -85,7 +85,7 @@ function renderBrief(root, r, opts) {
 
   // 3. What to do
   if (r.request_summary || r.current_status) {
-    root.appendChild(section("📋 Request",
+    root.appendChild(h("section", { class: "card", id: "request" }, h("div", { class: "label" }, "📋 Request"),
       r.request_summary && h("p", { class: "lead" }, r.request_summary),
       r.current_status && h("p", { class: "status-line" }, h("b", {}, "Now: "), r.current_status)));
   }
@@ -99,7 +99,7 @@ function renderBrief(root, r, opts) {
   const loc = r.location;
   const site = splitSite(loc.site);
   const small = [["Row", loc.row], ["Rack", loc.rack], ["RU", loc.unit]].filter(([, v]) => v);
-  root.appendChild(h("section", { class: "card where" },
+  root.appendChild(h("section", { class: "card where", id: "server" },
     h("div", { class: "label" }, "🖥️ Server"),
     h("div", { class: "chips" },
       r.server_names.length ? r.server_names.map((n) => copyChip(n)) : h("span", { class: "muted" }, "Not found in ticket")),

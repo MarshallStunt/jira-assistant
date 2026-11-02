@@ -15,7 +15,7 @@ async function installPlainClientRule() {
       type: "modifyHeaders",
       requestHeaders: [
         ...headers.map((header) => ({ header, operation: "remove" })),
-        { header: "user-agent", operation: "set", value: `jira-assistant/${chrome.runtime.getManifest().version}` }
+        { header: "user-agent", operation: "set", value: `lambda-rackside/${chrome.runtime.getManifest().version}` }
       ]
     },
     condition: {

@@ -370,6 +370,7 @@ button.link.part-open { margin-left: auto; display: inline-flex; gap: 3px; }
 .rma-catalog { display: flex; flex-direction: column; gap: 4px; }
 .rma-cands-head { font-size: 11.5px; }
 .rma-choose { color: var(--warn); font-weight: 600; }
+.rma-nomatch { font-size: 12px; color: var(--warn); padding: 6px 8px; border: 1px dashed var(--warn); border-radius: 6px; }
 .rma-cands { display: flex; flex-direction: column; gap: 4px; }
 .rma-cand { text-align: left; font-size: 12px; padding: 6px 8px; display: block; width: 100%; line-height: 1.5; }
 .rma-cand.chosen { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
@@ -462,3 +463,41 @@ svg.icon { flex: none; vertical-align: -2px; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 button:focus:not(:focus-visible) { outline: none; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* ---------- Section colours ----------
+   Each part of the brief has its own colour: a stripe on the left of its card, its heading, and its chip in the
+   jump bar. The section you're at is lit up in both places, so you can tell where you are at a glance. */
+:root {
+  --sec-request: #0c66e4; --sec-server: #1d7f8c; --sec-bmc: #6e5dc6; --sec-steps: #1f845a; --sec-parts: #c25100;
+  --sec-rma: #ae4787; --sec-history: #626f86; --sec-netbox: #5b7f24; --sec-confirm: #7f5f01;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --sec-request: #579dff; --sec-server: #60c6d2; --sec-bmc: #9f8fef; --sec-steps: #4bce97; --sec-parts: #faa53d;
+    --sec-rma: #e774bb; --sec-history: #8c9bab; --sec-netbox: #94c748; --sec-confirm: #e2b203;
+  }
+}
+#request { --sec: var(--sec-request); } #server { --sec: var(--sec-server); } #bmcBox { --sec: var(--sec-bmc); }
+#steps { --sec: var(--sec-steps); } #parts { --sec: var(--sec-parts); } #rmaBox { --sec: var(--sec-rma); }
+#history { --sec: var(--sec-history); } #netboxBox { --sec: var(--sec-netbox); } #confirm { --sec: var(--sec-confirm); }
+.card.caution { --sec: var(--warn); }
+#result .card[style*="--sec"], #result .card:is(#request, #server, #bmcBox, #steps, #parts, #rmaBox, #history, #netboxBox, #confirm, .caution) {
+  border-left: 4px solid var(--sec); padding-left: 11px; transition: box-shadow .2s;
+}
+#result .card:is(#request, #server, #bmcBox, #steps, #parts, #rmaBox, #history, #netboxBox, #confirm) .label {
+  color: var(--sec); font-size: 11.5px; letter-spacing: .05em;
+}
+#result .card:is(#request, #server, #bmcBox, #steps, #parts, #rmaBox, #history, #netboxBox, #confirm) > .label:first-child,
+#result details.card:is(#history, #netboxBox, #confirm) > summary .label { font-size: 12.5px; font-weight: 700; }
+#result .card.current { box-shadow: 0 0 0 1px var(--sec), 0 2px 10px color-mix(in srgb, var(--sec) 25%, transparent); }
+#rmaBox:empty { display: none; }
+
+/* jump bar: one row of chips in the sections' colours, scrolls sideways when it doesn't fit */
+.jump { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; padding-bottom: 2px; }
+.jump::-webkit-scrollbar { display: none; }
+.jump-link { flex: none; color: var(--jc); border-color: color-mix(in srgb, var(--jc) 45%, var(--border)); }
+.jump-link.active { background: var(--jc); color: var(--card); border-color: var(--jc); }
+.jump-link[data-for="request"] { --jc: var(--sec-request); } .jump-link[data-for="server"] { --jc: var(--sec-server); }
+.jump-link[data-for="bmcBox"] { --jc: var(--sec-bmc); } .jump-link[data-for="steps"] { --jc: var(--sec-steps); }
+.jump-link[data-for="parts"] { --jc: var(--sec-parts); } .jump-link[data-for="rmaBox"] { --jc: var(--sec-rma); }
+.jump-link[data-for="history"] { --jc: var(--sec-history); } .jump-link[data-for="netboxBox"] { --jc: var(--sec-netbox); }

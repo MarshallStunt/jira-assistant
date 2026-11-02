@@ -87,7 +87,7 @@ function fillDevContact() {
 }
 
 // ---------- Commands that run in the extension's folder ----------
-// They find the jira-assistant folder themselves, wherever it was unzipped (Desktop, Downloads…): the browser
+// They find the lambda-rackside folder themselves, wherever it was unzipped (Desktop, Downloads…): the browser
 // records the folder of an unpacked extension, by extension ID, in each profile's preferences.
 function browserDataDir() {
   const edge = /\bEdg\//.test(navigator.userAgent), brave = !!navigator.brave;
@@ -101,17 +101,17 @@ function folderCommand(mac, win) {
   if (IS_WIN) {
     return `$id='${id}'; $d = Get-ChildItem "${dir}\\*\\Secure Preferences","${dir}\\*\\Preferences" -ErrorAction SilentlyContinue | ` +
       `% { if ((Get-Content -Raw $_.FullName) -match ('"' + $id + '":\\{.*?"path":"([^"]*)"')) { [regex]::Unescape($Matches[1]) } } | Select-Object -First 1; ` +
-      `if ($d) { ${win} } else { 'jira-assistant folder not found: see Settings' }`;
+      `if ($d) { ${win} } else { 'lambda-rackside folder not found: see Settings' }`;
   }
-  if (!IS_MAC) return `d=~/Desktop/jira-assistant; ${mac}`; // Linux: adjust the path
+  if (!IS_MAC) return `d=~/Desktop/lambda-rackside; ${mac}`; // Linux: adjust the path
   return `for f in ${dir}/*/Secure\\ Preferences ${dir}/*/Preferences; do d=$(plutil -extract extensions.settings.${id}.path raw -o - "$f" 2>/dev/null) && break; done; ` +
-    `if [ -n "$d" ]; then ${mac}; else echo "jira-assistant folder not found: see Settings"; fi`;
+    `if [ -n "$d" ]; then ${mac}; else echo "lambda-rackside folder not found: see Settings"; fi`;
 }
 
 // ---------- Updates ----------
 // The latest version is read from the private GitHub repo with the user's own GitHub login in Chrome, so only
 // people who can see the repo get it. Checked at most every 2 hours (in the background, and when the panel opens).
-const UPDATE_REPO = "MarshallStunt/jira-assistant";
+const UPDATE_REPO = "MarshallStunt/lambda-rackside";
 const UPDATE_EVERY_MS = 2 * 60 * 60 * 1000;
 const UPDATE_LINKS = {
   changes: `https://github.com/${UPDATE_REPO}/commits/main`,
@@ -133,10 +133,10 @@ async function checkForUpdate(force = false) {
     try {
       // Redirects to a short-lived raw.githubusercontent.com link when the GitHub login can see the repo.
       const res = await fetch(`https://github.com/${UPDATE_REPO}/raw/main/manifest.json`, { credentials: "include", cache: "no-store" });
-      if (res.status === 404) throw new Error("sign in to GitHub in Chrome with an account that can see the jira-assistant repo");
+      if (res.status === 404) throw new Error("sign in to GitHub in Chrome with an account that can see the lambda-rackside repo");
       if (!res.ok) throw new Error(`GitHub answered HTTP ${res.status}`);
       const latest = (await res.json().catch(() => ({}))).version;
-      if (!latest) throw new Error("sign in to GitHub in Chrome with an account that can see the jira-assistant repo");
+      if (!latest) throw new Error("sign in to GitHub in Chrome with an account that can see the lambda-rackside repo");
       r = { ok: true, latest, at: Date.now() };
     } catch (e) {
       r = { ok: false, error: e.message, at: Date.now() };
@@ -205,9 +205,9 @@ function updateSteps() {
     el("details", {},
       el("summary", {}, "Update by hand"),
       el("ol", {},
-        el("li", {}, "Paste this in ", IS_WIN ? "PowerShell" : "Terminal", ". It finds your jira-assistant folder and pulls (git copy) or downloads the new ZIP and opens the folder (ZIP copy):",
+        el("li", {}, "Paste this in ", IS_WIN ? "PowerShell" : "Terminal", ". It finds your lambda-rackside folder and pulls (git copy) or downloads the new ZIP and opens the folder (ZIP copy):",
           el("div", { className: "row" }, el("input", { type: "text", readOnly: true, className: "mono", value: cmd }), copy),
-          "Or ", el("a", { href: UPDATE_LINKS.zip, target: "_blank", textContent: "download the ZIP" }), " and copy its files over your jira-assistant folder."),
+          "Or ", el("a", { href: UPDATE_LINKS.zip, target: "_blank", textContent: "download the ZIP" }), " and copy its files over your lambda-rackside folder."),
         el("li", {}, reload, " then reopen this panel."),
         el("li", { className: "muted" }, "If ping or BMC then says the helper is out of date, run the setup command again (Settings → Start)."))));
 }

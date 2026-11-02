@@ -1,18 +1,20 @@
 # Lambda Rackside (Chrome extension)
 
-*The DC Ops ticket assistant. Formerly "Lambda DC Ops Assistant".*
+*The DC Ops ticket assistant.*
 
 A side panel for Datacenter Operations. Open a Jira ticket and get a one-glance work brief: is it safe to power down, what to do, where the server is, its NetBox record and BMC health, the right replacement part with its Lambda P/N and where it's in stock, and an AI you can ask follow-up questions. Works on Mac and Windows, with Claude, OpenAI, Gemini or a local model.
 
 **Help, bugs or feature ideas:** message the developer, [Hadi Khodja on Slack](https://lambda.slack.com/team/U0AAMLCUCUA). The link is also at the bottom of the panel and of Settings.
 
+**Finding your way:** every section has its own colour (stripe, heading and chip in the jump bar at the top). Tap a chip to jump to it; the section you're reading is lit up as you scroll.
+
 ## Quick start
-1. **Load the extension:** `chrome://extensions` → turn on **Developer mode** → **Load unpacked** → select this `jira-assistant` folder. Pin it and click its icon to open the side panel. Settings opens on first install.
+1. **Load the extension:** `chrome://extensions` → turn on **Developer mode** → **Load unpacked** → select this `lambda-rackside` folder. Pin it and click its icon to open the side panel. Settings opens on first install.
 2. **Get an AI key.** Settings → **Start** → *Getting started* has a ready-to-send request for IT. Claude (Anthropic) is recommended; OpenAI and Gemini also work.
 3. **Install the helper** (ping, BMC). Settings → *Getting started* → **Copy** the setup command and run it: on a Mac in **Terminal**, on Windows in **PowerShell**. It asks before installing anything.
 4. **Paste the key**, click **Load models**, then **Save**. Open any Jira ticket.
 
-**Updates:** Chrome checks the private GitHub repo every 2 hours, and the panel checks on every Analyze / Re-analyze, with your GitHub login (you need access to the repo). A new version shows a red **NEW** badge on the toolbar icon, one notification (click it to open Settings → Updates), and a 🆕 banner at the top of the panel; **Later** hides the banner and badge until the next version. **⬇️ Update now** downloads it with your GitHub login, the helper puts it in your jira-assistant folder (`git pull` if it's a git copy, otherwise the new files over the old ones) and updates itself, and the extension reloads. *Update by hand* has a command that does the same from Terminal/PowerShell (or a ZIP link). Settings → Start → **Check for updates** checks right away. Needs helper 1.6.0 or later: older helpers update by hand once. The footer of the panel shows the version.
+**Updates:** Chrome checks the private GitHub repo every 2 hours, and the panel checks on every Analyze / Re-analyze, with your GitHub login (you need access to the repo). A new version shows a red **NEW** badge on the toolbar icon, one notification (click it to open Settings → Updates), and a 🆕 banner at the top of the panel; **Later** hides the banner and badge until the next version. **⬇️ Update now** downloads it with your GitHub login, the helper puts it in your lambda-rackside folder (`git pull` if it's a git copy, otherwise the new files over the old ones) and updates itself, and the extension reloads. *Update by hand* has a command that does the same from Terminal/PowerShell (or a ZIP link). Settings → Start → **Check for updates** checks right away. Needs helper 1.6.0 or later: older helpers update by hand once. The footer of the panel shows the version.
 
 ## The panel, top to bottom
 - **🆕 Update banner** when GitHub has a newer version (see *Updates* above).
@@ -50,7 +52,10 @@ The brief streams in as the AI writes it. Results, checklist ticks and chats are
 ### RMA
 After swapping a failed part, **🔁 RMA → Create RMA ticket…** (under Parts) opens the RMA ticket for this DC ticket.
 - **No RMA yet:** creates the RMA ticket in the **RMA** project as the kind you choose (**Advance Replacement** by default; also CRU, Manufacturing Repair, Onsite Warranty, Return to Vendor), copies the server details from the DC ticket (every field both have: hostname, chassis SN, device type, site, location, data center, NetBox links, IPs, rack), fills in Faulty Part SN, Replacement SN, Faulty Part Number, MPN, Component Issue and RMA type, and links it to the DC ticket (**relates to**).
-- **The ticket already has an RMA ticket** (linked to it or to one of its sub-tasks): no new one is created; the details are added to that RMA ticket as an **internal comment** (pick which one if there are several).
+- **The ticket already has an RMA ticket** (linked to it or to one of its sub-tasks): no new one is created; the details are added to that RMA ticket as an **internal comment** (pick which one if there are several). A swap already on that RMA ticket (its old and new S/N in the same comment, its description or its S/N fields) is skipped: the form proposes the next swap the ticket mentions that it doesn't have yet, or says there's nothing new to add.
+- **The swap comes from one comment:** the old and new S/N are taken from the same comment (the tech who swapped writes both, e.g. "OLD: X / New: Y"), never one from here and one from there. Each S/N shows whose comment it came from.
+- **The part comes from the whole ticket, checked against the catalog:** Lambda P/Ns, SKUs and MPNs named anywhere in the ticket, and catalog descriptions in its sentences ("Switch board is replaced"), are listed first, those in the swap comment ahead of the rest. Parts that don't fit the server go to the bottom.
+- **The catalog list is never left empty:** with no description match it lists the catalog parts for the chosen Component that fit the server; typing a Lambda P/N, SKU or MPN finds that part.
 - **Pre-filled, then confirmed by you.** Each value shows where it came from until you edit it:
   - **Part number** (Lambda P/N, MPN): always a **catalog** part (the source of truth), settled in this order:
     1. **NetBox, by serial**: the new S/N (the spare you installed: inventory asset "<P/N>_<serial>") or the old S/N (an installed module) gives the exact P/N.
@@ -91,7 +96,7 @@ Four tabs, Save always at the bottom:
 
 ### Helper (ping and BMC)
 Browsers can't ping or talk to BMCs, so a small Python helper does it through Chrome's native messaging. The setup command installs it; to install it on its own, use the command under Settings → Servers & BMC:
-- The commands in Settings find the `jira-assistant` folder wherever it is (Desktop, Downloads…): they look up the folder Chrome loaded the extension from, by its ID. If that fails, run the script by hand: `bash <folder>/setup.sh <extension-id>` (Windows: `powershell -ExecutionPolicy Bypass -File "<folder>\setup.ps1" <extension-id>`); dragging the file into Terminal/PowerShell types its path.
+- The commands in Settings find the `lambda-rackside` folder wherever it is (Desktop, Downloads…): they look up the folder Chrome loaded the extension from, by its ID. If that fails, run the script by hand: `bash <folder>/setup.sh <extension-id>` (Windows: `powershell -ExecutionPolicy Bypass -File "<folder>\setup.ps1" <extension-id>`); dragging the file into Terminal/PowerShell types its path.
 - Mac/Linux: `bash <folder>/ping-helper/install.sh <extension-id>` (remove: `ping-helper/uninstall.sh`). Needs python3 (`xcode-select --install`).
 - Windows (PowerShell): `powershell -ExecutionPolicy Bypass -File "<folder>\ping-helper\install.ps1" <extension-id>` (remove: `uninstall.ps1`). Needs Python 3 (`winget install Python.Python.3.13`).
 - Installing again for another copy of the folder (another extension ID) keeps the earlier one working too.

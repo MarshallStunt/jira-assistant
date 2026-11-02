@@ -191,7 +191,7 @@ function locationText(loc) {
 
 function asJiraComment(key, r, ping, netbox, bmc, bmcPower) {
   const L = [
-    `*Lambda DC Ops brief — ${key}*${r.task_type ? ` (${r.task_type})` : ""}`,
+    `*Lambda Rackside brief — ${key}*${r.task_type ? ` (${r.task_type})` : ""}`,
     `*Power-down:* ${POWER[r.power_down.verdict].label} — ${r.power_down.reason}`,
     `*Server:* ${r.server_names.join(", ") || "Not found"}`,
     `*Location:* ${locationText(r.location) || "Not found"}`,

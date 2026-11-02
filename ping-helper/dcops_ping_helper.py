@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Lambda Rackside helper (ping and BMC) — Chrome native messaging host for the extension (formerly DC Ops Assistant).
+Lambda Rackside helper (ping and BMC) — Chrome native messaging host for the Lambda Rackside extension.
 
 Chrome extensions cannot send ICMP pings, so the extension asks this helper to:
   - resolve each address (DNS),
@@ -711,7 +711,7 @@ def _version_tuple(v):
 def _is_this_extension(manifest_text):
     try:
         name = json.loads(manifest_text).get("name", "")
-        return "Rackside" in name or "DC Ops" in name  # new and old names
+        return "Rackside" in name or "DC Ops" in name  # copies installed before 1.24 still say "DC Ops"
     except (ValueError, AttributeError):
         return False
 
