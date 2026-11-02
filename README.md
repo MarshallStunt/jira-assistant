@@ -1,4 +1,6 @@
-# Lambda DC Ops Assistant (Chrome extension)
+# Lambda Rackside (Chrome extension)
+
+*The DC Ops ticket assistant. Formerly "Lambda DC Ops Assistant".*
 
 A side panel for Datacenter Operations. Open a Jira ticket and get a one-glance work brief: is it safe to power down, what to do, where the server is, its NetBox record and BMC health, the right replacement part with its Lambda P/N and where it's in stock, and an AI you can ask follow-up questions. Works on Mac and Windows, with Claude, OpenAI, Gemini or a local model.
 

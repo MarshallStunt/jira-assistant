@@ -221,7 +221,7 @@ $("save").addEventListener("click", async () => {
 // ---------- Backup & restore ----------
 // Settings as a JSON file. API keys and tokens are left out unless ticked, so a file can be shared with the team.
 
-const BACKUP_APP = "lambda-dc-ops-assistant";
+const BACKUP_APP = "lambda-dc-ops-assistant"; // kept from the old name so older backup files still load
 const SECRET_SETTINGS = ["anthropicKey", "openaiKey", "geminiKey", "localApiKey", "netboxToken"];
 
 function backupMsg(text, bad = false) {
@@ -235,7 +235,7 @@ $("exportSettings").addEventListener("click", async () => {
   const settings = Object.fromEntries(Object.keys(DEFAULTS).filter((k) => withSecrets || !SECRET_SETTINGS.includes(k)).map((k) => [k, s[k]]));
   const file = { app: BACKUP_APP, version: chrome.runtime.getManifest().version, savedAt: new Date().toISOString(), settings };
   const url = URL.createObjectURL(new Blob([JSON.stringify(file, null, 2)], { type: "application/json" }));
-  const name = `dc-ops-assistant-settings-${new Date().toISOString().slice(0, 10)}.json`;
+  const name = `rackside-settings-${new Date().toISOString().slice(0, 10)}.json`;
   Object.assign(document.createElement("a"), { href: url, download: name }).click();
   setTimeout(() => URL.revokeObjectURL(url), 5000);
   backupMsg(withSecrets ? `Saved ${name} with your API keys: keep it private.` : `Saved ${name} (no API keys or tokens).`);
@@ -249,7 +249,7 @@ $("importFile").addEventListener("change", async (e) => {
   try {
     let data;
     try { data = JSON.parse(await file.text()); } catch { throw new Error("it isn't a settings file (not JSON)"); }
-    if (data?.app !== BACKUP_APP || typeof data.settings !== "object") throw new Error("it isn't a DC Ops Assistant settings file");
+    if (data?.app !== BACKUP_APP || typeof data.settings !== "object") throw new Error("it isn't a Rackside settings file");
     // Only known settings, each the same type as its default. Settings not in the file keep their current value.
     const sameType = (a, b) => (Array.isArray(a) ? Array.isArray(b) : typeof a === typeof b && !Array.isArray(b) && b !== null);
     const valid = Object.fromEntries(Object.entries(data.settings).filter(([k, v]) => k in DEFAULTS && sameType(DEFAULTS[k], v)));
@@ -283,7 +283,7 @@ showUpdate(false);
 
 const IT_REQUEST = `Hi IT,
 
-I'm in Datacenter Operations and use the Lambda DC Ops Assistant (Chrome extension) to summarize Jira tickets. Could you please create an API key for me on the company account?
+I'm in Datacenter Operations and use Lambda Rackside (our DC Ops Chrome extension) to summarize Jira tickets. Could you please create an API key for me on the company account?
 
 Preferred: Anthropic Claude (console.anthropic.com). OpenAI or Google Gemini also work.
 Use: reading Jira tickets I'm assigned, about 10–50 a day. Ticket text is sent to the provider.

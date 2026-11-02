@@ -73,7 +73,7 @@ async function newVersionCheck() {
   await chrome.storage.local.set({ updateNotified: u.latest });
   chrome.notifications.create("update", {
     type: "basic", iconUrl: "icons/icon128.png", priority: 1,
-    title: `DC Ops Assistant ${u.latest} is available`,
+    title: `Lambda Rackside ${u.latest} is available`,
     message: `You have ${u.current}. Click to update in one click.`
   });
 }

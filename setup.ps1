@@ -1,4 +1,4 @@
-# One-time setup for the Lambda DC Ops Assistant on Windows.
+# One-time setup for the Lambda Rackside on Windows.
 # Installs what the extension needs on this computer, asking before each install:
 #   - Python 3   -> for the ping / BMC helper
 #   - the ping / BMC helper itself
@@ -28,7 +28,7 @@ if ($ExtensionId -notmatch '^[a-p]{32}$') {
 }
 $HasWinget = [bool](Get-Command winget -ErrorAction SilentlyContinue)
 
-Write-Host "Lambda DC Ops Assistant - setup" -ForegroundColor Cyan
+Write-Host "Lambda Rackside - setup" -ForegroundColor Cyan
 Write-Host "This installs the tools the extension needs. You'll be asked before anything is installed."
 
 # 1. Python -----------------------------------------------------------------

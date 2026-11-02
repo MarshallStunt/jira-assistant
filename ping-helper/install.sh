@@ -1,5 +1,5 @@
 #!/bin/bash
-# Installs the Lambda DC Ops Assistant helper so the Chrome extension can ping servers and talk to BMCs.
+# Installs the Lambda Rackside helper so the Chrome extension can ping servers and talk to BMCs.
 # Usage:  bash install.sh <extension-id>
 # The exact command (with your extension ID) is shown in the extension's Settings page.
 set -euo pipefail
@@ -76,7 +76,7 @@ except (OSError, ValueError, AttributeError):
 new = f"chrome-extension://{ext_id}/"
 json.dump({
     "name": name,
-    "description": "Lambda DC Ops Assistant helper (ping, BMC)",
+    "description": "Lambda Rackside helper (ping, BMC)",
     "path": path,
     "type": "stdio",
     "allowed_origins": ([o for o in old if o != new] + [new])[-5:],

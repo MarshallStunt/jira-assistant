@@ -1,5 +1,5 @@
 #!/bin/bash
-# Removes the Lambda DC Ops Assistant helper (ping, BMC).
+# Removes the Lambda Rackside helper (ping, BMC).
 set -uo pipefail
 HOST_NAME="com.dcops.ping_helper"
 case "$(uname)" in

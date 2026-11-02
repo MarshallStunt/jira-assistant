@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Lambda DC Ops Assistant helper (ping and BMC) — Chrome native messaging host for the extension.
+Lambda Rackside helper (ping and BMC) — Chrome native messaging host for the extension (formerly DC Ops Assistant).
 
 Chrome extensions cannot send ICMP pings, so the extension asks this helper to:
   - resolve each address (DNS),
@@ -44,7 +44,7 @@ import urllib.parse
 import urllib.request
 import zipfile
 
-VERSION = "1.6.0"
+VERSION = "1.6.1"
 MAX_TARGETS = 12
 IS_MAC = sys.platform == "darwin"
 IS_WIN = sys.platform == "win32"
@@ -708,7 +708,8 @@ def _version_tuple(v):
 
 def _is_this_extension(manifest_text):
     try:
-        return "DC Ops" in json.loads(manifest_text).get("name", "")
+        name = json.loads(manifest_text).get("name", "")
+        return "Rackside" in name or "DC Ops" in name  # new and old names
     except (ValueError, AttributeError):
         return False
 
@@ -735,7 +736,7 @@ def self_update(msg):
     with open(os.path.join(folder, "manifest.json"), encoding="utf-8") as f:
         current = f.read()
     if not _is_this_extension(current):
-        raise HelperError(f"{folder} doesn't look like the DC Ops Assistant folder; not touching it.")
+        raise HelperError(f"{folder} doesn't look like the Rackside folder; not touching it.")
 
     if os.path.isdir(os.path.join(folder, ".git")):
         # A git copy: pull instead of overwriting (never asks for a password; stops if there are local changes).
@@ -759,7 +760,7 @@ def self_update(msg):
     names = [n for n in archive.namelist() if not n.endswith("/")]
     top = names[0].split("/")[0] + "/" if names and all(n.startswith(names[0].split("/")[0] + "/") for n in names) else ""
     if top + "manifest.json" not in names or not _is_this_extension(archive.read(top + "manifest.json").decode("utf-8", "replace")):
-        raise HelperError("The downloaded update isn't the DC Ops Assistant.")
+        raise HelperError("The downloaded update isn't Lambda Rackside.")
     new_version = json.loads(archive.read(top + "manifest.json")).get("version", "")
     if _version_tuple(new_version) < _version_tuple(json.loads(current).get("version", "")):
         raise HelperError(f"The download ({new_version}) is older than what you have; nothing changed.")

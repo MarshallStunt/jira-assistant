@@ -1,4 +1,4 @@
-# Installs the Lambda DC Ops Assistant helper on Windows so the Chrome extension can ping servers and talk to BMCs.
+# Installs the Lambda Rackside helper on Windows so the Chrome extension can ping servers and talk to BMCs.
 # Usage (PowerShell):  powershell -ExecutionPolicy Bypass -File install.ps1 <extension-id>
 # The exact command (with your extension ID) is shown in the extension's Settings page.
 param([string]$ExtensionId = "")
@@ -51,7 +51,7 @@ if (Test-Path $Manifest) { try { $Origins = @((Get-Content -Raw $Manifest | Conv
 $Origins = @(@($Origins | Where-Object { $_ -match '^chrome-extension://[a-p]{32}/$' -and $_ -ne $New }) + $New | Select-Object -Last 5)
 $json = @{
   name = $HostName
-  description = "Lambda DC Ops Assistant helper (ping, BMC)"
+  description = "Lambda Rackside helper (ping, BMC)"
   path = $Run
   type = "stdio"
   allowed_origins = $Origins

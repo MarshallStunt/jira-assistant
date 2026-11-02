@@ -1,4 +1,4 @@
-# Removes the Lambda DC Ops Assistant helper (ping, BMC) from Windows.
+# Removes the Lambda Rackside helper (ping, BMC) from Windows.
 # Usage (PowerShell):  powershell -ExecutionPolicy Bypass -File uninstall.ps1
 $HostName = "com.dcops.ping_helper"
 foreach ($key in @(
@@ -9,4 +9,4 @@ foreach ($key in @(
   Remove-Item -Path $key -Force -ErrorAction SilentlyContinue
 }
 Remove-Item -Path (Join-Path $env:LOCALAPPDATA "DCOpsPingHelper") -Recurse -Force -ErrorAction SilentlyContinue
-Write-Host "Removed the Lambda DC Ops Assistant helper."
+Write-Host "Removed the Lambda Rackside helper."

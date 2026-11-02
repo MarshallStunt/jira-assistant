@@ -1,8 +1,9 @@
 {
   "manifest_version": 3,
-  "name": "Lambda DC Ops Assistant",
-  "version": "1.23.1",
-  "description": "Lambda Datacenter Ops brief for Jira tickets: power-down safety, server & location, NetBox, BMC health, parts catalog & spare stock, Slack — with Claude, OpenAI, Gemini or a local model.",
+  "name": "Lambda Rackside – DC Ops Assistant",
+  "short_name": "Rackside",
+  "version": "1.24.0",
+  "description": "Lambda Rackside: the DC Ops ticket assistant. A brief for Jira tickets: power-down safety, server & location, NetBox, BMC health, parts catalog & spare stock, Slack — with Claude, OpenAI, Gemini or a local model.",
   "permissions": [
     "sidePanel",
     "storage",
@@ -41,7 +42,7 @@
   },
   "options_page": "options.html",
   "action": {
-    "default_title": "Lambda DC Ops Assistant",
+    "default_title": "Lambda Rackside",
     "default_icon": {
       "16": "icons/icon16.png",
       "32": "icons/icon32.png",

@@ -1,5 +1,5 @@
 #!/bin/bash
-# One-time setup for the Lambda DC Ops Assistant on a Mac.
+# One-time setup for the Lambda Rackside on a Mac.
 # Installs what the extension needs on this computer, asking before each install:
 #   - python3 (Apple Command Line Tools)   → for the ping / BMC helper
 #   - the ping / BMC helper itself
@@ -26,7 +26,7 @@ if [ "$(uname)" != "Darwin" ]; then
   exit 1
 fi
 
-echo "${BOLD}Lambda DC Ops Assistant — setup${RESET}"
+echo "${BOLD}Lambda Rackside — setup${RESET}"
 echo "This installs the tools the extension needs. You'll be asked before anything is installed."
 
 # 1. python3 ------------------------------------------------------------

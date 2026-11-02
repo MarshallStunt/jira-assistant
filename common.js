@@ -152,7 +152,7 @@ async function showUpdateBadge(u) {
   const on = !!u.available && updateLater !== u.latest;
   await chrome.action.setBadgeText({ text: on ? "NEW" : "" });
   if (on) await chrome.action.setBadgeBackgroundColor({ color: "#d93025" });
-  await chrome.action.setTitle({ title: on ? `Lambda DC Ops Assistant: version ${u.latest} is available` : "Lambda DC Ops Assistant" });
+  await chrome.action.setTitle({ title: on ? `Lambda Rackside: version ${u.latest} is available` : "Lambda Rackside" });
 }
 
 // One click: download the new version with the GitHub login, then the helper puts it in the extension's folder
