@@ -44,12 +44,17 @@ $Run = Join-Path $InstallDir "run.bat"
 Set-Content -Path $Run -Encoding ASCII -Value "@echo off`r`n`"$($Py.Path)`" `"%~dp0dcops_ping_helper.py`" %*"
 
 $Manifest = Join-Path $InstallDir "$HostName.json"
+# Keep extensions allowed by an earlier install (e.g. a second copy of the folder), newest last.
+$New = "chrome-extension://$ExtensionId/"
+$Origins = @()
+if (Test-Path $Manifest) { try { $Origins = @((Get-Content -Raw $Manifest | ConvertFrom-Json).allowed_origins) } catch {} }
+$Origins = @(@($Origins | Where-Object { $_ -match '^chrome-extension://[a-p]{32}/$' -and $_ -ne $New }) + $New | Select-Object -Last 5)
 $json = @{
   name = $HostName
   description = "Lambda DC Ops Assistant helper (ping, BMC)"
   path = $Run
   type = "stdio"
-  allowed_origins = @("chrome-extension://$ExtensionId/")
+  allowed_origins = $Origins
 } | ConvertTo-Json
 [IO.File]::WriteAllText($Manifest, $json)  # UTF-8 without BOM (Chrome rejects a BOM)
 

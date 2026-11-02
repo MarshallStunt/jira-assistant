@@ -567,7 +567,7 @@ async function showUpdateBar() {
   $("updateBar").replaceChildren(
     h("div", { class: "update-head" },
       h("span", {}, h("b", {}, `🆕 Version ${u.latest} is available`), h("span", { class: "muted" }, ` (you have ${u.current})`)),
-      h("button", { class: "mini", onclick: () => steps.classList.toggle("hidden") }, "How to update"),
+      h("button", { class: "mini primary", onclick: () => steps.classList.toggle("hidden") }, "⬇️ Update"),
       h("a", { href: UPDATE_LINKS.changes, target: "_blank", rel: "noopener" }, "What's new"),
       h("button", { class: "mini subtle", onclick: async () => {
         await chrome.storage.local.set({ updateLater: u.latest });

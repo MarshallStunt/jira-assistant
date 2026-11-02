@@ -146,20 +146,61 @@ async function checkForUpdate(force = false) {
   return { ...r, current, available: !!r.ok && isNewerVersion(r.latest, current) };
 }
 
-// The update steps (shared by the panel banner and Settings): get the new files, then reload the extension.
+// One click: download the new version with the GitHub login, then the helper puts it in the extension's folder
+// (or runs git pull in a git copy) and updates itself. Returns the helper's answer.
+async function updateNow() {
+  const res = await fetch(UPDATE_LINKS.zip, { credentials: "include", cache: "no-store" });
+  if (!res.ok) throw new Error(res.status === 404 ? "sign in to GitHub in Chrome with an account that can see the repo" : `GitHub answered HTTP ${res.status}`);
+  const bytes = new Uint8Array(await res.arrayBuffer());
+  let bin = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  const r = await sendNative({ action: "self_update", zip: btoa(bin) });
+  if (!r.ok && (/unknown action/i.test(r.error || "") || r.notInstalled)) {
+    throw new Error("the helper on this computer is too old (or not installed) to update by itself: use “Update by hand” below once");
+  }
+  if (!r.ok) throw new Error(r.error);
+  return r;
+}
+
+// The update steps (shared by the panel banner and Settings): Update now, or by hand.
 function updateSteps() {
   const el = (tag, props = {}, ...kids) => { const e = Object.assign(document.createElement(tag), props); e.append(...kids.filter(Boolean)); return e; };
-  const cmd = folderCommand(`git -C "$d" pull`, `git -C "$d" pull`);
+  const status = el("span", { className: "muted" });
+  const now = el("button", { type: "button", className: "primary", textContent: "⬇️ Update now" });
+  now.onclick = async () => {
+    now.disabled = true;
+    status.style.color = "";
+    status.textContent = "Downloading from GitHub and installing…";
+    try {
+      const r = await updateNow();
+      status.textContent = `✓ Updated${r.method === "git" ? " (git pull)" : ` (${r.files} files)`}${r.helper ? `, helper ${r.helper}` : ""}. Reloading the extension: reopen this panel.`;
+      setTimeout(() => chrome.runtime.reload(), 1500);
+    } catch (e) {
+      status.textContent = `Couldn't update: ${e.message}.`;
+      status.style.color = "var(--err)";
+      now.disabled = false;
+    }
+  };
+
+  // By hand: git copies pull; ZIP copies get the new ZIP downloading and their folder opened.
+  const zipNote = "Not a git copy: the new ZIP is downloading. Unzip it and copy its files into the folder that just opened, then reload the extension.";
+  const cmd = folderCommand(
+    `if [ -d "$d/.git" ]; then git -C "$d" pull; else open "${UPDATE_LINKS.zip}"; open "$d"; echo "${zipNote}"; fi`,
+    `if (Test-Path "$d\\.git") { git -C "$d" pull } else { Start-Process '${UPDATE_LINKS.zip}'; explorer.exe $d; '${zipNote}' }`);
   const copy = el("button", { type: "button", className: "mini", textContent: "Copy" });
   copy.onclick = async () => { await navigator.clipboard.writeText(cmd); copy.textContent = "Copied ✓"; setTimeout(() => (copy.textContent = "Copy"), 1500); };
-  const reload = el("button", { type: "button", className: "mini primary", textContent: "🔄 Reload extension" });
+  const reload = el("button", { type: "button", className: "mini", textContent: "🔄 Reload extension" });
   reload.onclick = () => chrome.runtime.reload();
-  return el("ol", { className: "update-steps" },
-    el("li", {}, "Get the new files. If you set it up with git, paste this in ", IS_WIN ? "PowerShell" : "Terminal", ":",
-      el("div", { className: "row" }, el("input", { type: "text", readOnly: true, className: "mono", value: cmd }), copy),
-      "Otherwise ", el("a", { href: UPDATE_LINKS.zip, target: "_blank", textContent: "download the ZIP" }), " and copy its files over your jira-assistant folder."),
-    el("li", {}, reload, " then close and reopen this panel."),
-    el("li", { className: "muted" }, "If ping or BMC then says the helper is out of date, run the setup command again (Settings → Start)."));
+  return el("div", { className: "update-steps" },
+    el("div", { className: "row update-now" }, now, status),
+    el("details", {},
+      el("summary", {}, "Update by hand"),
+      el("ol", {},
+        el("li", {}, "Paste this in ", IS_WIN ? "PowerShell" : "Terminal", ". It finds your jira-assistant folder and pulls (git copy) or downloads the new ZIP and opens the folder (ZIP copy):",
+          el("div", { className: "row" }, el("input", { type: "text", readOnly: true, className: "mono", value: cmd }), copy),
+          "Or ", el("a", { href: UPDATE_LINKS.zip, target: "_blank", textContent: "download the ZIP" }), " and copy its files over your jira-assistant folder."),
+        el("li", {}, reload, " then reopen this panel."),
+        el("li", { className: "muted" }, "If ping or BMC then says the helper is out of date, run the setup command again (Settings → Start)."))));
 }
 
 // ---------- HTTP helpers ----------

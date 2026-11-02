@@ -114,7 +114,11 @@ h1.brand { gap: 10px; }
 .update-head { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
 .update-head > span:first-child { flex: 1 1 200px; }
 .update-head a, .update-steps a { color: var(--accent); }
-.update-steps { margin: 8px 0 0; padding-left: 18px; line-height: 1.5; }
+.update-steps { margin: 8px 0 0; line-height: 1.5; }
+.update-steps .update-now { align-items: center; gap: 10px; flex-wrap: wrap; }
+.update-steps details { margin-top: 6px; }
+.update-steps summary { cursor: pointer; color: var(--accent); font-weight: 600; }
+.update-steps ol { margin: 6px 0 0; padding-left: 18px; }
 .update-steps li { margin-bottom: 6px; }
 .update-steps .row { margin: 4px 0; }
 .update-steps input { flex: 1; min-width: 0; font-size: 11px; }

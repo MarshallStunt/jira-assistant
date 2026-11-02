@@ -66,14 +66,20 @@ for b in "${BROWSERS[@]}"; do
   [ -d "$dir" ] || continue
   mkdir -p "$dir/NativeMessagingHosts"
   "$PY" - "$dir/NativeMessagingHosts/$HOST_NAME.json" "$INSTALL_DIR/run.sh" "$EXT_ID" "$HOST_NAME" <<'PYEOF'
-import json, sys
+import json, re, sys
 out, path, ext_id, name = sys.argv[1:5]
+# Keep extensions allowed by an earlier install (e.g. a second copy of the folder), newest last.
+try:
+    old = [o for o in json.load(open(out)).get("allowed_origins", []) if re.fullmatch(r"chrome-extension://[a-p]{32}/", o)]
+except (OSError, ValueError, AttributeError):
+    old = []
+new = f"chrome-extension://{ext_id}/"
 json.dump({
     "name": name,
     "description": "Lambda DC Ops Assistant helper (ping, BMC)",
     "path": path,
     "type": "stdio",
-    "allowed_origins": [f"chrome-extension://{ext_id}/"],
+    "allowed_origins": ([o for o in old if o != new] + [new])[-5:],
 }, open(out, "w"), indent=2)
 PYEOF
   echo "✓ Registered for $b"

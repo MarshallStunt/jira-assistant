@@ -10,7 +10,7 @@ A side panel for Datacenter Operations. Open a Jira ticket and get a one-glance 
 3. **Install the helper** (ping, BMC). Settings → *Getting started* → **Copy** the setup command and run it: on a Mac in **Terminal**, on Windows in **PowerShell**. It asks before installing anything.
 4. **Paste the key**, click **Load models**, then **Save**. Open any Jira ticket.
 
-**Updates:** the panel checks the private GitHub repo every few hours with your GitHub login in Chrome (you need access to the repo) and shows a 🆕 banner when there's a new version, with a copyable `git pull` command (or a ZIP download) and a **Reload extension** button. Settings → Start → **Check for updates** checks right away. The footer of the panel shows the version.
+**Updates:** the panel checks the private GitHub repo every few hours with your GitHub login in Chrome (you need access to the repo) and shows a 🆕 banner when there's a new version. **⬇️ Update now** downloads it with your GitHub login, the helper puts it in your jira-assistant folder (`git pull` if it's a git copy, otherwise the new files over the old ones) and updates itself, and the extension reloads. *Update by hand* has a command that does the same from Terminal/PowerShell (or a ZIP link). Settings → Start → **Check for updates** checks right away. Needs helper 1.6.0 or later: older helpers update by hand once. The footer of the panel shows the version.
 
 ## The panel, top to bottom
 - **🆕 Update banner** when GitHub has a newer version (see *Updates* above).
@@ -71,6 +71,7 @@ Browsers can't ping or talk to BMCs, so a small Python helper does it through Ch
 - The commands in Settings find the `jira-assistant` folder wherever it is (Desktop, Downloads…): they look up the folder Chrome loaded the extension from, by its ID. If that fails, run the script by hand: `bash <folder>/setup.sh <extension-id>` (Windows: `powershell -ExecutionPolicy Bypass -File "<folder>\setup.ps1" <extension-id>`); dragging the file into Terminal/PowerShell types its path.
 - Mac/Linux: `bash <folder>/ping-helper/install.sh <extension-id>` (remove: `ping-helper/uninstall.sh`). Needs python3 (`xcode-select --install`).
 - Windows (PowerShell): `powershell -ExecutionPolicy Bypass -File "<folder>\ping-helper\install.ps1" <extension-id>` (remove: `uninstall.ps1`). Needs Python 3 (`winget install Python.Python.3.13`).
+- Installing again for another copy of the folder (another extension ID) keeps the earlier one working too.
 - Installed to `~/Library/Application Support/DCOpsPingHelper` or `%LOCALAPPDATA%\DCOpsPingHelper`, registered for Chrome, Edge, Brave and Chromium. **Test ping helper** in Settings shows its version and TLS library.
 - It prefers a Python with TLS 1.3; if a BMC refuses the connection it retries with `curl`.
 
@@ -95,7 +96,7 @@ Browsers can't ping or talk to BMCs, so a small Python helper does it through Ch
 ## Data and security
 - With a cloud provider, the ticket (and for chat questions, matching catalog rows and stock) goes to that provider; with a local model nothing leaves your computer. Privacy mode hides sensitive values either way.
 - BMC passwords are only pasted, kept in memory until the panel closes, and sent only to the BMC (private IPs, HTTPS) through the local helper. Never saved, never sent to the AI.
-- NetBox, the catalog and Slack are only read. The update check only reads the version number from the GitHub repo. The one write the extension can make is the confirmed BMC power action.
+- NetBox, the catalog and Slack are only read. The update check only reads the version number from the GitHub repo; **Update now** downloads the repo and writes only to the extension's own folder (found from its ID) and the helper's install folder. The one write the extension can make is the confirmed BMC power action.
 - API keys are stored in Chrome's local extension storage.
 - ⚠️ Some NetBox journal entries contain BMC passwords in plain text ("PWD - …"). The extension strips those lines, but they should be removed from NetBox.
 
@@ -118,7 +119,7 @@ Browsers can't ping or talk to BMCs, so a small Python helper does it through Ch
 | `icons.js`, `icons/` | Line icons and the λ logo |
 | `options.html` / `options.js` | Settings page (tabs, Test AI, backup & restore, updates) |
 | `styles.css` | Styles for both pages (light and dark) |
-| `ping-helper/` | Python helper (ping; BMC health, console link and power over Redfish) and its Mac/Windows installers |
+| `ping-helper/` | Python helper (ping; BMC health, console link and power over Redfish; self-update) and its Mac/Windows installers |
 | `setup.sh` / `setup.ps1` | One-step setup for Mac / Windows |
 
 `icons/logo.svg` is a λ mark in Lambda violet; to use the official logo, replace it and `icons/icon16/32/48/128.png` with artwork of the same sizes.

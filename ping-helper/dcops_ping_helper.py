@@ -9,7 +9,8 @@ Chrome extensions cannot send ICMP pings, so the extension asks this helper to:
 It also talks to the server's BMC with the login the user pasted in the panel:
   - reads the server's health from the BMC's Redfish API (GETs),
   - shuts down / powers on the server through Redfish, only when the user confirmed it in the panel,
-  - gets the link that opens the BMC's HTML5 remote console (iKVM) already logged in (Supermicro).
+  - gets the link that opens the BMC's HTML5 remote console (iKVM) already logged in (Supermicro),
+  - updates the extension's own folder (and this helper) to a new version the extension downloaded from GitHub.
 
 Protocol: Chrome native messaging (4-byte native-endian length + UTF-8 JSON) on stdin/stdout.
 Requests:
@@ -18,12 +19,14 @@ Requests:
   {"action": "bmc_health", "ip": "10.1.2.3", "login": {"user": "ADMIN", "password": "..."}, "port": 443}
   {"action": "bmc_power", "ip": "10.1.2.3", "login": {...}, "reset_type": "GracefulShutdown" | "ForceOff" | "On", "confirm": "10.1.2.3"}
   {"action": "bmc_console", "ip": "10.1.2.3", "login": {...}}
+  {"action": "self_update", "zip": "<base64 of the repo ZIP>"}
 Only hostnames / IP addresses are accepted, BMC requests only go to private IPs, and commands are run
 without a shell. Logins are used for the one request and never stored.
 """
 
 import base64
 import concurrent.futures
+import io
 import ipaddress
 import json
 import os
@@ -39,8 +42,9 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import zipfile
 
-VERSION = "1.5.0"
+VERSION = "1.6.0"
 MAX_TARGETS = 12
 IS_MAC = sys.platform == "darwin"
 IS_WIN = sys.platform == "win32"
@@ -660,6 +664,119 @@ def bmc_console(msg):
     raise HelperError("This BMC doesn't hand out a remote-console link over Redfish. Use Open, log in, then Remote Control → Launch.")
 
 
+# ---------- Self-update ----------
+# The extension downloads the new version from the private GitHub repo with the user's login and passes the ZIP
+# here; the helper puts it in the extension's folder (git copies: git pull instead) and updates itself. The folder
+# is found from the calling extension's ID, which Chrome gives the helper (argv[1]) and records with the folder
+# in each browser profile's preferences. Only that folder is written to.
+
+BROWSER_DIRS = (["Google/Chrome", "Google/Chrome Canary", "Microsoft Edge", "BraveSoftware/Brave-Browser", "Chromium"] if IS_MAC
+                else [r"Google\Chrome\User Data", r"Microsoft\Edge\User Data", r"BraveSoftware\Brave-Browser\User Data", r"Chromium\User Data"] if IS_WIN
+                else ["google-chrome", "microsoft-edge", "BraveSoftware/Brave-Browser", "chromium"])
+
+
+def caller_extension_id():
+    origin = next((a for a in sys.argv[1:] if a.startswith("chrome-extension://")), "")
+    ext_id = origin[len("chrome-extension://"):].strip("/")
+    return ext_id if re.fullmatch(r"[a-p]{32}", ext_id) else None
+
+
+def extension_folder(ext_id):
+    base = (os.path.expanduser("~/Library/Application Support") if IS_MAC else os.environ.get("LOCALAPPDATA", "") if IS_WIN
+            else os.path.expanduser("~/.config"))
+    for browser in BROWSER_DIRS:
+        root = os.path.join(base, browser)
+        try:
+            profiles = [os.path.join(root, d) for d in os.listdir(root)]
+        except OSError:
+            continue
+        for profile in profiles:
+            for name in ("Secure Preferences", "Preferences"):
+                try:
+                    with open(os.path.join(profile, name), encoding="utf-8") as f:
+                        path = json.load(f)["extensions"]["settings"][ext_id]["path"]
+                except (OSError, ValueError, KeyError, TypeError):
+                    continue
+                if path and os.path.isfile(os.path.join(path, "manifest.json")):
+                    return path
+    return None
+
+
+def _version_tuple(v):
+    return tuple(int(x) for x in re.findall(r"\d+", str(v))[:3])
+
+
+def _is_this_extension(manifest_text):
+    try:
+        return "DC Ops" in json.loads(manifest_text).get("name", "")
+    except (ValueError, AttributeError):
+        return False
+
+
+def _update_helper_from(folder):
+    """Copy the folder's newer helper over this one (the next request uses it). Returns its version, or None."""
+    src = os.path.join(folder, "ping-helper", "dcops_ping_helper.py")
+    try:
+        with open(src, encoding="utf-8") as f:
+            m = re.search(r'^VERSION = "([^"]+)"', f.read(), re.M)
+        if not m or _version_tuple(m.group(1)) <= _version_tuple(VERSION):
+            return None
+        shutil.copyfile(src, os.path.abspath(__file__))
+        return m.group(1)
+    except OSError:
+        return None
+
+
+def self_update(msg):
+    ext_id = caller_extension_id()
+    folder = ext_id and extension_folder(ext_id)
+    if not folder:
+        raise HelperError("Couldn't find the extension's folder. Update it by hand (Settings → Start → Updates).")
+    with open(os.path.join(folder, "manifest.json"), encoding="utf-8") as f:
+        current = f.read()
+    if not _is_this_extension(current):
+        raise HelperError(f"{folder} doesn't look like the DC Ops Assistant folder; not touching it.")
+
+    if os.path.isdir(os.path.join(folder, ".git")):
+        # A git copy: pull instead of overwriting (never asks for a password; stops if there are local changes).
+        git = find_cmd("git")
+        if not git:
+            raise HelperError("This folder is a git copy but git isn't installed. Update it by hand.")
+        try:
+            p = subprocess.run([git, "-C", folder, "pull", "--ff-only"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                               timeout=90, env=dict(os.environ, GIT_TERMINAL_PROMPT="0"), **NO_WINDOW)
+        except subprocess.TimeoutExpired:
+            raise HelperError("git pull took too long. Run it by hand (Settings → Start → Updates).")
+        out = p.stdout.decode("utf-8", "replace").strip()
+        if p.returncode != 0:
+            raise HelperError(f"git pull failed ({out.splitlines()[-1] if out else p.returncode}). Run it by hand to see why.")
+        return {"ok": True, "method": "git", "folder": folder, "helper": _update_helper_from(folder)}
+
+    try:
+        archive = zipfile.ZipFile(io.BytesIO(base64.b64decode(msg.get("zip") or "", validate=True)))
+    except (ValueError, zipfile.BadZipFile):
+        raise HelperError("The downloaded update isn't a valid ZIP.")
+    names = [n for n in archive.namelist() if not n.endswith("/")]
+    top = names[0].split("/")[0] + "/" if names and all(n.startswith(names[0].split("/")[0] + "/") for n in names) else ""
+    if top + "manifest.json" not in names or not _is_this_extension(archive.read(top + "manifest.json").decode("utf-8", "replace")):
+        raise HelperError("The downloaded update isn't the DC Ops Assistant.")
+    new_version = json.loads(archive.read(top + "manifest.json")).get("version", "")
+    if _version_tuple(new_version) < _version_tuple(json.loads(current).get("version", "")):
+        raise HelperError(f"The download ({new_version}) is older than what you have; nothing changed.")
+    root = os.path.realpath(folder)
+    files = []
+    for name in names:
+        rel = name[len(top):]
+        target = os.path.realpath(os.path.join(root, rel))
+        if rel and not rel.startswith(".git/") and target.startswith(root + os.sep):  # only inside the folder
+            files.append((name, target))
+    for name, target in files:
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        with open(target, "wb") as out:
+            out.write(archive.read(name))
+    return {"ok": True, "method": "zip", "folder": folder, "version": new_version, "files": len(files), "helper": _update_helper_from(folder)}
+
+
 def handle(msg):
     action = (msg or {}).get("action")
     if action == "hello":
@@ -673,7 +790,7 @@ def handle(msg):
         with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, len(targets))) as pool:
             results = list(pool.map(lambda t: check_target(t, count), targets))
         return {"ok": True, "version": VERSION, "results": results, "at": int(time.time() * 1000)}
-    handlers = {"bmc_health": bmc_health, "bmc_power": bmc_power, "bmc_console": bmc_console}
+    handlers = {"bmc_health": bmc_health, "bmc_power": bmc_power, "bmc_console": bmc_console, "self_update": self_update}
     if action in handlers:
         try:
             return handlers[action](msg)
