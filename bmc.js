@@ -1,4 +1,4 @@
-// BMC card: health over Redfish and a guarded power off/on, with the BMC password the user pastes.
+// BMC card: health over Redfish, a guarded power off/on, and the remote console (iKVM), with the BMC password the user pastes.
 // Everything that talks to the BMC runs in the local helper (ping-helper/).
 
 // BMC IPs from the ticket and NetBox, plus the serials used to spot the wrong BMC.
@@ -27,19 +27,22 @@ async function bmcCall(message) {
 // login = { user, password } pasted in the panel.
 const readBmcHealth = (ip, login) => bmcCall({ action: "bmc_health", ip, login });
 
+// { ok, uri }: a page on the BMC that opens its HTML5 remote console already logged in (one-time login).
+const bmcConsole = (ip, login) => bmcCall({ action: "bmc_console", ip, login });
+
 // resetType: "GracefulShutdown" | "ForceOff" | "On". confirm must equal the IP (typed by the user).
 const bmcPower = (ip, login, resetType, confirm) => bmcCall({ action: "bmc_power", ip, login, reset_type: resetType, confirm });
 
-// Password box for Check health: copy the IP (if you haven't got the password yet), find it in 1Password,
+// Password box for Check health and Console: copy the IP (if you haven't got the password yet), find it in 1Password,
 // copy the password and paste it here. Pasting starts the check. Kept in memory only, for re-checks.
-function loginForm(ip, user, onSubmit) {
+function loginForm(ip, user, onSubmit, label = "Check") {
   const pass = h("input", { type: "password", placeholder: `Paste ${user} password`, autocomplete: "off", class: "bmc-in" });
   const submit = () => pass.value && onSubmit({ user, password: pass.value });
   const form = h("form", { class: "bmc-login" },
     h("ol", { class: "bmc-steps" },
       h("li", {}, "Need the password? ", copyChip(ip, "Copy IP"), " then open 1Password (", h("kbd", {}, KEYS.quickAccess), ") and paste it."),
       h("li", {}, "Copy the password and paste it here (", h("kbd", {}, KEYS.paste), "):")),
-    h("div", { class: "bmc-login-row" }, pass, h("button", { class: "mini", type: "submit" }, "Check")),
+    h("div", { class: "bmc-login-row" }, pass, h("button", { class: "mini", type: "submit" }, label)),
     h("div", { class: "muted bmc-note" }, "Sent only to the BMC. Never saved or sent to the AI."));
   form.addEventListener("submit", (e) => { e.preventDefault(); submit(); });
   pass.addEventListener("paste", () => setTimeout(submit, 0)); // the value is set after the paste event
@@ -181,8 +184,9 @@ function renderBmc(box, state, actions) {
 }
 
 function renderBmcOne(ip, state, actions) {
-  const { who, health = {}, showLogin = {}, user = "ADMIN", reach = {} } = state;
+  const { who, health = {}, showLogin = {}, user = "ADMIN", reach = {}, console: kvm = {}, pending = {} } = state;
   const x = health[ip];
+  const c = kvm[ip];
   const r = reach[ip];
   const down = r && r.ok && !r.reachable; // pinged, no reply
   const one = h("div", { class: "bmc-one" });
@@ -191,6 +195,8 @@ function renderBmcOne(ip, state, actions) {
       r && h("span", { class: `dot ${!r.ok ? "err" : r.reachable ? "up" : "down"}`, title: r.ok ? (r.reachable ? "Answers ping" : "No ping reply") : r.error },
         h("span", { class: "sr-only" }, r.ok ? (r.reachable ? "answers ping" : "no ping reply") : "ping failed"))),
     h("button", { class: "mini", title: "Open the BMC web interface in a new tab", onclick: () => actions.openBmc(ip) }, "Open ", icon("external", 11)),
+    actions.onConsole && h("button", { class: "mini", disabled: c === "loading" ? "" : null,
+      title: "Open the server's remote console (screen, keyboard, mouse) in a new tab, already logged in", onclick: () => actions.onConsole(ip) }, "🖥️ Console"),
     h("button", { class: `mini${down ? " subtle" : ""}`, disabled: x === "loading" ? "" : null, title: "Read power state, failed parts and event log from the BMC (Redfish, read-only)", onclick: () => actions.onHealth(ip) },
       down ? "Try anyway" : x && x !== "loading" ? [icon("refresh", 11), " Health"] : "Check health")));
 
@@ -200,6 +206,15 @@ function renderBmcOne(ip, state, actions) {
       h("b", {}, "🚫 BMC isn't answering from this computer"), r.interface_name || r.interface ? ` (traffic goes via ${interfaceLabel(r)})` : "",
       ". Login, health and power won't work until it does. Check that your VPN is connected or that you're on the datacenter network, then click ",
       h("i", {}, "Ping again"), " above."));
+  }
+
+  if (c === "loading") {
+    one.appendChild(h("div", { class: "muted" }, h("span", { class: "spinner" }), "Opening the remote console…"));
+  } else if (c?.ok) {
+    one.appendChild(h("div", { class: "bmc-console" }, "🖥️ Remote console opened in a new tab. If Chrome warns about the BMC's certificate, click ",
+      h("i", {}, "Advanced → Proceed"), ". The console link works once: click 🖥️ Console again for a new one."));
+  } else if (c) {
+    one.appendChild(h("div", { class: "ping-msg bad" }, c.error));
   }
 
   if (x === "loading") {
@@ -212,8 +227,8 @@ function renderBmcOne(ip, state, actions) {
   if ((x?.outdated || x?.notInstalled) && actions.onSetup) {
     one.appendChild(h("button", { class: "mini", onclick: actions.onSetup }, "Open helper setup"));
   }
-  if (showLogin[ip] && x !== "loading" && !down) {
-    one.appendChild(loginForm(ip, user, (login) => actions.onHealth(ip, login)));
+  if (showLogin[ip] && x !== "loading" && c !== "loading" && !down) {
+    one.appendChild(loginForm(ip, user, (login) => actions.onLogin(ip, login), pending[ip] === "console" ? "Open console" : "Check"));
   }
   return one;
 }

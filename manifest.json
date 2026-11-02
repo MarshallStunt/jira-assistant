@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Lambda DC Ops Assistant",
-  "version": "1.18.0",
+  "version": "1.20.0",
   "description": "Lambda Datacenter Ops brief for Jira tickets: power-down safety, server & location, NetBox, BMC health, parts catalog & spare stock, Slack — with Claude, OpenAI, Gemini or a local model.",
   "permissions": [
     "sidePanel",
@@ -21,6 +21,8 @@
     "https://docs.google.com/*",
     "https://app.slack.com/*",
     "https://*.googleusercontent.com/*",
+    "https://github.com/*",
+    "https://raw.githubusercontent.com/*",
     "http://localhost/*",
     "http://127.0.0.1/*"
   ],

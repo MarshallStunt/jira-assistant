@@ -57,25 +57,10 @@ async function ensureLocalPermission(baseUrl) {
   if (!ok) throw new Error(`Chrome permission for ${origin} was denied.`);
 }
 
-// Setup commands find the jira-assistant folder themselves, wherever it was unzipped (Desktop, Downloads…):
-// the browser records the folder of an unpacked extension, by extension ID, in each profile's preferences.
-function browserDataDir() {
-  const edge = /\bEdg\//.test(navigator.userAgent), brave = !!navigator.brave;
-  if (IS_WIN) return `$env:LOCALAPPDATA\\${edge ? "Microsoft\\Edge" : brave ? "BraveSoftware\\Brave-Browser" : "Google\\Chrome"}\\User Data`;
-  return `~/Library/Application\\ Support/${edge ? "Microsoft\\ Edge" : brave ? "BraveSoftware/Brave-Browser" : "Google/Chrome"}`;
-}
-
-// script: "setup" or "ping-helper/install" (.sh on Mac, .ps1 on Windows).
+// script: "setup" or "ping-helper/install" (.sh on Mac, .ps1 on Windows), run from the jira-assistant folder.
 function setupCommand(script) {
-  const id = chrome.runtime.id, dir = browserDataDir();
-  if (IS_WIN) {
-    return `$id='${id}'; $d = Get-ChildItem "${dir}\\*\\Secure Preferences","${dir}\\*\\Preferences" -ErrorAction SilentlyContinue | ` +
-      `% { if ((Get-Content -Raw $_.FullName) -match ('"' + $id + '":\\{.*?"path":"([^"]*)"')) { [regex]::Unescape($Matches[1]) } } | Select-Object -First 1; ` +
-      `if ($d) { powershell -ExecutionPolicy Bypass -File "$d\\${script.replace("/", "\\")}.ps1" $id } else { 'jira-assistant folder not found: see Settings' }`;
-  }
-  if (!IS_MAC) return `bash ~/Desktop/jira-assistant/${script}.sh ${id}`; // Linux: adjust the path
-  return `for f in ${dir}/*/Secure\\ Preferences ${dir}/*/Preferences; do d=$(plutil -extract extensions.settings.${id}.path raw -o - "$f" 2>/dev/null) && break; done; ` +
-    `bash "\${d:?jira-assistant folder not found}/${script}.sh" ${id}`;
+  return folderCommand(`bash "$d/${script}.sh" ${chrome.runtime.id}`,
+    `powershell -ExecutionPolicy Bypass -File "$d\\${script.replace("/", "\\")}.ps1" $id`);
 }
 
 async function load() {
@@ -278,6 +263,22 @@ $("importFile").addEventListener("change", async (e) => {
     backupMsg(`Couldn't load ${file.name}: ${err.message}.`, true);
   }
 });
+
+// ---------- Updates ----------
+
+let updateRun = 0;
+async function showUpdate(force) {
+  const run = ++updateRun;
+  if (force) $("updateStatus").textContent = "Checking GitHub…";
+  const u = await checkForUpdate(force);
+  if (run !== updateRun) return; // a newer check is running: show only its result
+  $("updateStatus").textContent = !u.ok ? `You have ${u.current}. Couldn't check: ${u.error}.`
+    : u.available ? `🆕 Version ${u.latest} is available (you have ${u.current}).` : `✓ You have the latest version (${u.current}).`;
+  $("updateStatus").style.color = u.ok ? "" : "var(--err)";
+  $("updateHelp").replaceChildren(...(u.available ? [updateSteps()] : []));
+}
+$("checkUpdate").addEventListener("click", () => showUpdate(true));
+showUpdate(false);
 
 const IT_REQUEST = `Hi IT,
 

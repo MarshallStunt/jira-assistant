@@ -10,7 +10,7 @@ A side panel for Datacenter Operations. Open a Jira ticket and get a one-glance 
 3. **Install the helper** (ping, BMC). Settings → *Getting started* → **Copy** the setup command and run it: on a Mac in **Terminal**, on Windows in **PowerShell**. It asks before installing anything.
 4. **Paste the key**, click **Load models**, then **Save**. Open any Jira ticket.
 
-To update: pull the latest version, then click **reload** on the extension in `chrome://extensions`. The footer of the panel shows the version.
+**Updates:** the panel checks the private GitHub repo every few hours with your GitHub login in Chrome (you need access to the repo) and shows a 🆕 banner when there's a new version, with a copyable `git pull` command (or a ZIP download) and a **Reload extension** button. Settings → Start → **Check for updates** checks right away. The footer of the panel shows the version.
 
 ## The panel, top to bottom
 - **No ticket in this tab?** A start screen says to go to a Jira ticket tab, lists the tickets already open in your tabs (click one to go there), and reminds you to add an AI key if there isn't one.
@@ -32,6 +32,7 @@ The brief streams in as the AI writes it. Results, checklist ticks and chats are
 - Each BMC IP (from the ticket or NetBox) with a ping dot. If the BMC doesn't answer, the card says so: you need the VPN or the datacenter network.
 - **Check health** asks for the BMC password (username `ADMIN`, changeable): *Copy IP*, find it in 1Password (⌘⇧Space / Ctrl+Shift+Space), copy the password, paste it. Shows power state, health, model, serial, BIOS/BMC firmware, failed parts and event-log warnings, and flags a serial that doesn't match the ticket/NetBox.
 - **⏻ Power off… / Power on…** after a health check. Deliberately slow: the panel shows the ticket's power-down verdict, you pick *Shut down* (clean) or *Force off*, and type the BMC IP (no paste) to unlock the button. The helper checks again and only sends the BMC's own Redfish reset. The action goes into the Jira comment.
+- **🖥️ Console** opens the server's live remote console (screen, keyboard, mouse: the BMC's HTML5 iKVM) in a new tab, already logged in. Paste the BMC password once; the helper asks the BMC's Redfish API (Supermicro) for a console link with a one-time login, so there's no login page. If Chrome warns about the BMC's certificate, click Advanced → Proceed. BMCs without that link (other vendors, old firmware): use **Open**, log in, then Remote Control → Launch.
 - Tip: set each BMC item's website in 1Password to `https://<bmc-ip>` so 1Password fills the login when you click **Open**.
 
 ### Parts: catalog, stock and AI

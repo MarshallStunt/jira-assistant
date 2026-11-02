@@ -423,7 +423,7 @@ async function setupBmc(key, entry, nb) {
   const who = bmcTargets(entry.brief, nb, findSerialsInText(entry.issueText || ""));
   const cacheKey = `bmc:${key}`;
   const state = {
-    who, showLogin: {}, creds: {}, power: {}, user: settings.bmcUser || "ADMIN",
+    who, showLogin: {}, creds: {}, power: {}, console: {}, pending: {}, user: settings.bmcUser || "ADMIN",
     verdict: entry.brief.power_down, reach: pingByIp(lastResult?.key === key ? lastResult.ping : null),
     health: (await chrome.storage.session.get(cacheKey))[cacheKey] || {}
   };
@@ -445,19 +445,42 @@ async function setupBmc(key, entry, nb) {
     if (partsView?.key === key) partsView.update(); // failed parts from the BMC → catalog lookup
     draw();
   };
+  // Remote console: the helper asks the BMC for a console link with a one-time login, opened in a new tab.
+  const openConsole = async (ip) => {
+    state.console[ip] = "loading";
+    state.showLogin[ip] = false;
+    draw();
+    const resp = await bmcConsole(ip, state.creds[ip]);
+    if (resp.ok) {
+      chrome.tabs.create({ url: new URL(bmcUrl(settings.bmcUrl, ip)).origin + resp.uri });
+    } else if (/rejected the login/i.test(resp.error || "")) {
+      delete state.creds[ip];
+      state.pending[ip] = "console";
+      state.showLogin[ip] = true;
+    }
+    state.console[ip] = resp.ok ? { ok: true } : resp;
+    draw();
+  };
+  // No password yet: ask for it (the clipboard is left alone, it may already hold the password), then do what was asked.
+  const needLogin = (ip, then) => {
+    if (state.creds[ip]) return false;
+    state.pending[ip] = then;
+    state.showLogin[ip] = true;
+    draw();
+    return true;
+  };
   const actions = {
     openBmc,
     onSetup: () => chrome.runtime.openOptionsPage(),
-    onHealth: (ip, login) => {
-      if (login) state.creds[ip] = login; // memory only, for "↻ Health" and power actions
-      // No password yet: ask for it (the clipboard is left alone, it may already hold the password).
-      if (!state.creds[ip]) {
-        state.showLogin[ip] = true;
-        draw();
-        return;
-      }
-      readHealth(ip);
+    onLogin: (ip, login) => {
+      state.creds[ip] = login; // memory only, for "↻ Health", the console and power actions
+      const then = state.pending[ip];
+      delete state.pending[ip];
+      if (then === "console") openConsole(ip);
+      else readHealth(ip);
     },
+    onHealth: (ip) => needLogin(ip, "health") || readHealth(ip),
+    onConsole: (ip) => needLogin(ip, "console") || openConsole(ip),
     onPowerOpen: (ip, open) => {
       state.power[ip] = { open };
       draw();
@@ -612,6 +635,28 @@ async function analyze(force = false) {
   }
 }
 
+// ---------- Update banner ----------
+// Shown when GitHub has a newer version (checked every few hours). "Later" hides it until the next version.
+
+async function showUpdateBar() {
+  const u = await checkForUpdate();
+  const { updateLater } = await chrome.storage.local.get("updateLater");
+  if (!u.available || updateLater === u.latest) return $("updateBar").classList.add("hidden");
+  const steps = updateSteps();
+  steps.classList.add("hidden");
+  $("updateBar").replaceChildren(
+    h("div", { class: "update-head" },
+      h("span", {}, h("b", {}, `🆕 Version ${u.latest} is available`), h("span", { class: "muted" }, ` (you have ${u.current})`)),
+      h("button", { class: "mini", onclick: () => steps.classList.toggle("hidden") }, "How to update"),
+      h("a", { href: UPDATE_LINKS.changes, target: "_blank", rel: "noopener" }, "What's new"),
+      h("button", { class: "mini subtle", onclick: async () => {
+        await chrome.storage.local.set({ updateLater: u.latest });
+        $("updateBar").classList.add("hidden");
+      } }, "Later")),
+    steps);
+  $("updateBar").classList.remove("hidden");
+}
+
 // ---------- Start screen (no ticket in this tab) ----------
 // Says what to do, and lists the Jira tickets already open in other tabs so one click goes there.
 
@@ -703,4 +748,5 @@ async function copyComment() {
 $("copyBtn").addEventListener("click", copyComment);
 
 fillDevContact();
+showUpdateBar().catch((e) => console.warn("update check", e));
 refresh();

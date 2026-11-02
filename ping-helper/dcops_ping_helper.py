@@ -8,7 +8,8 @@ Chrome extensions cannot send ICMP pings, so the extension asks this helper to:
   - report which local network interface the traffic is routed through.
 It also talks to the server's BMC with the login the user pasted in the panel:
   - reads the server's health from the BMC's Redfish API (GETs),
-  - shuts down / powers on the server through Redfish, only when the user confirmed it in the panel.
+  - shuts down / powers on the server through Redfish, only when the user confirmed it in the panel,
+  - gets the link that opens the BMC's HTML5 remote console (iKVM) already logged in (Supermicro).
 
 Protocol: Chrome native messaging (4-byte native-endian length + UTF-8 JSON) on stdin/stdout.
 Requests:
@@ -16,6 +17,7 @@ Requests:
   {"action": "ping", "targets": [{"address": "host-01", "role": "host"}, ...], "count": 3}
   {"action": "bmc_health", "ip": "10.1.2.3", "login": {"user": "ADMIN", "password": "..."}, "port": 443}
   {"action": "bmc_power", "ip": "10.1.2.3", "login": {...}, "reset_type": "GracefulShutdown" | "ForceOff" | "On", "confirm": "10.1.2.3"}
+  {"action": "bmc_console", "ip": "10.1.2.3", "login": {...}}
 Only hostnames / IP addresses are accepted, BMC requests only go to private IPs, and commands are run
 without a shell. Logins are used for the one request and never stored.
 """
@@ -38,7 +40,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-VERSION = "1.4.0"
+VERSION = "1.5.0"
 MAX_TARGETS = 12
 IS_MAC = sys.platform == "darwin"
 IS_WIN = sys.platform == "win32"
@@ -622,6 +624,42 @@ def bmc_health(msg):
     return result
 
 
+def _find_ikvm(obj, depth=0):
+    """An "…/IKVM" link anywhere in a Redfish object (Supermicro puts it under Oem)."""
+    if depth > 4:
+        return None
+    if isinstance(obj, dict):
+        link = obj.get("@odata.id")
+        if isinstance(link, str) and link.rstrip("/").lower().endswith("/ikvm"):
+            return link
+        values = obj.values()
+    elif isinstance(obj, list):
+        values = obj
+    else:
+        return None
+    return next((x for x in (_find_ikvm(v, depth + 1) for v in values) if x), None)
+
+
+def bmc_console(msg):
+    """Link to the BMC's HTML5 remote console (iKVM) with a one-time login in it, from Supermicro's Redfish
+    IKVM resource. The panel opens it in a new tab; the link isn't stored."""
+    ip, rf = bmc_session(msg)
+    root = rf.get("/redfish/v1")
+    managers = rf.members(rf._try_get(_link(root, "Managers")) or {}, 2) if _link(root, "Managers") else []
+    manager = managers[0] if managers else {}
+    base = (manager.get("@odata.id") or "/redfish/v1/Managers/1").rstrip("/")
+    candidates = [p for p in (_find_ikvm(manager), f"{base}/IKVM", f"{base}/Oem/Supermicro/IKVM") if p]
+    for path in dict.fromkeys(candidates):
+        kvm = rf._try_get(path)
+        if not kvm:
+            continue
+        uri = next((v for k, v in kvm.items() if isinstance(v, str) and k.lower().replace(" ", "") in ("uri", "urlforhtml5", "html5uri")), "")
+        # Only a page on the BMC itself (a path, not a link elsewhere).
+        if uri.startswith("/") and not uri.startswith("//"):
+            return {"ok": True, "ip": ip, "uri": uri, "interface": kvm.get("Current interface") or kvm.get("CurrentInterface") or ""}
+    raise HelperError("This BMC doesn't hand out a remote-console link over Redfish. Use Open, log in, then Remote Control → Launch.")
+
+
 def handle(msg):
     action = (msg or {}).get("action")
     if action == "hello":
@@ -635,7 +673,7 @@ def handle(msg):
         with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, len(targets))) as pool:
             results = list(pool.map(lambda t: check_target(t, count), targets))
         return {"ok": True, "version": VERSION, "results": results, "at": int(time.time() * 1000)}
-    handlers = {"bmc_health": bmc_health, "bmc_power": bmc_power}
+    handlers = {"bmc_health": bmc_health, "bmc_power": bmc_power, "bmc_console": bmc_console}
     if action in handlers:
         try:
             return handlers[action](msg)

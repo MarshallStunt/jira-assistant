@@ -21,6 +21,82 @@ function fillDevContact() {
   }
 }
 
+// ---------- Commands that run in the extension's folder ----------
+// They find the jira-assistant folder themselves, wherever it was unzipped (Desktop, Downloads…): the browser
+// records the folder of an unpacked extension, by extension ID, in each profile's preferences.
+function browserDataDir() {
+  const edge = /\bEdg\//.test(navigator.userAgent), brave = !!navigator.brave;
+  if (IS_WIN) return `$env:LOCALAPPDATA\\${edge ? "Microsoft\\Edge" : brave ? "BraveSoftware\\Brave-Browser" : "Google\\Chrome"}\\User Data`;
+  return `~/Library/Application\\ Support/${edge ? "Microsoft\\ Edge" : brave ? "BraveSoftware/Brave-Browser" : "Google/Chrome"}`;
+}
+
+// mac / win: the command to run once the folder is found, as "$d" (Terminal on a Mac, PowerShell on Windows).
+function folderCommand(mac, win) {
+  const id = chrome.runtime.id, dir = browserDataDir();
+  if (IS_WIN) {
+    return `$id='${id}'; $d = Get-ChildItem "${dir}\\*\\Secure Preferences","${dir}\\*\\Preferences" -ErrorAction SilentlyContinue | ` +
+      `% { if ((Get-Content -Raw $_.FullName) -match ('"' + $id + '":\\{.*?"path":"([^"]*)"')) { [regex]::Unescape($Matches[1]) } } | Select-Object -First 1; ` +
+      `if ($d) { ${win} } else { 'jira-assistant folder not found: see Settings' }`;
+  }
+  if (!IS_MAC) return `d=~/Desktop/jira-assistant; ${mac}`; // Linux: adjust the path
+  return `for f in ${dir}/*/Secure\\ Preferences ${dir}/*/Preferences; do d=$(plutil -extract extensions.settings.${id}.path raw -o - "$f" 2>/dev/null) && break; done; ` +
+    `if [ -n "$d" ]; then ${mac}; else echo "jira-assistant folder not found: see Settings"; fi`;
+}
+
+// ---------- Updates ----------
+// The latest version is read from the private GitHub repo with the user's own GitHub login in Chrome, so only
+// people who can see the repo get it. Checked at most every 6 hours.
+const UPDATE_REPO = "MarshallStunt/jira-assistant";
+const UPDATE_EVERY_MS = 6 * 60 * 60 * 1000;
+const UPDATE_LINKS = {
+  changes: `https://github.com/${UPDATE_REPO}/commits/main`,
+  zip: `https://github.com/${UPDATE_REPO}/archive/refs/heads/main.zip`
+};
+
+function isNewerVersion(a, b) {
+  const pa = String(a).split(".").map(Number), pb = String(b).split(".").map(Number);
+  for (let i = 0; i < 3; i++) if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) > (pb[i] || 0);
+  return false;
+}
+
+// { ok, latest, current, available, error, at }
+async function checkForUpdate(force = false) {
+  const current = chrome.runtime.getManifest().version;
+  const { updateCheck } = await chrome.storage.local.get("updateCheck");
+  let r = updateCheck;
+  if (force || !r || Date.now() - r.at > UPDATE_EVERY_MS) {
+    try {
+      // Redirects to a short-lived raw.githubusercontent.com link when the GitHub login can see the repo.
+      const res = await fetch(`https://github.com/${UPDATE_REPO}/raw/main/manifest.json`, { credentials: "include", cache: "no-store" });
+      if (res.status === 404) throw new Error("sign in to GitHub in Chrome with an account that can see the jira-assistant repo");
+      if (!res.ok) throw new Error(`GitHub answered HTTP ${res.status}`);
+      const latest = (await res.json().catch(() => ({}))).version;
+      if (!latest) throw new Error("sign in to GitHub in Chrome with an account that can see the jira-assistant repo");
+      r = { ok: true, latest, at: Date.now() };
+    } catch (e) {
+      r = { ok: false, error: e.message, at: Date.now() };
+    }
+    await chrome.storage.local.set({ updateCheck: r });
+  }
+  return { ...r, current, available: !!r.ok && isNewerVersion(r.latest, current) };
+}
+
+// The update steps (shared by the panel banner and Settings): get the new files, then reload the extension.
+function updateSteps() {
+  const el = (tag, props = {}, ...kids) => { const e = Object.assign(document.createElement(tag), props); e.append(...kids.filter(Boolean)); return e; };
+  const cmd = folderCommand(`git -C "$d" pull`, `git -C "$d" pull`);
+  const copy = el("button", { type: "button", className: "mini", textContent: "Copy" });
+  copy.onclick = async () => { await navigator.clipboard.writeText(cmd); copy.textContent = "Copied ✓"; setTimeout(() => (copy.textContent = "Copy"), 1500); };
+  const reload = el("button", { type: "button", className: "mini primary", textContent: "🔄 Reload extension" });
+  reload.onclick = () => chrome.runtime.reload();
+  return el("ol", { className: "update-steps" },
+    el("li", {}, "Get the new files. If you set it up with git, paste this in ", IS_WIN ? "PowerShell" : "Terminal", ":",
+      el("div", { className: "row" }, el("input", { type: "text", readOnly: true, className: "mono", value: cmd }), copy),
+      "Otherwise ", el("a", { href: UPDATE_LINKS.zip, target: "_blank", textContent: "download the ZIP" }), " and copy its files over your jira-assistant folder."),
+    el("li", {}, reload, " then close and reopen this panel."),
+    el("li", { className: "muted" }, "If ping or BMC then says the helper is out of date, run the setup command again (Settings → Start)."));
+}
+
 const DEFAULTS = {
   provider: "anthropic",
   anthropicKey: "",
