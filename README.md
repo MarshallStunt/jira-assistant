@@ -6,7 +6,7 @@ A side panel for Datacenter Operations. Open a Jira ticket and get a one-glance 
 
 **Help, bugs or feature ideas:** message the developer, [Hadi Khodja on Slack](https://lambda.slack.com/team/U0AAMLCUCUA). The link is also at the bottom of the panel and of Settings.
 
-**Finding your way:** every section has its own colour (stripe, heading and chip in the jump bar at the top). Tap a chip to jump to it; the section you're reading is lit up as you scroll.
+**Finding your way:** every section has its own colour (a stripe, a tinted header and a chip in the jump bar at the top). Tap a chip to jump to it; the section you're reading is lit up as you scroll. The chips show progress: **✅ Steps 2/5** as you tick steps (✓ when all are done) and **🔁 RMA ✓** once the RMA ticket is created.
 
 ## Quick start
 1. **Load the extension:** `chrome://extensions` → turn on **Developer mode** → **Load unpacked** → select this `lambda-rackside` folder. Pin it and click its icon to open the side panel. Settings opens on first install.

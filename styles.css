@@ -502,3 +502,15 @@ button:focus:not(:focus-visible) { outline: none; }
 .jump-link[data-for="bmcBox"] { --jc: var(--sec-bmc); } .jump-link[data-for="steps"] { --jc: var(--sec-steps); }
 .jump-link[data-for="parts"] { --jc: var(--sec-parts); } .jump-link[data-for="rmaBox"] { --jc: var(--sec-rma); }
 .jump-link[data-for="history"] { --jc: var(--sec-history); } .jump-link[data-for="netboxBox"] { --jc: var(--sec-netbox); }
+
+/* Section header band: the top of each card is tinted in its colour, so cards don't all look the same. */
+#result .card:is(#request, #server, #bmcBox, #steps, #parts, #rmaBox, #history, #netboxBox, #confirm) > .label:first-child,
+#result details.card:is(#history, #netboxBox, #confirm) > summary {
+  margin: -10px -12px 10px -11px; padding: 8px 12px 8px 11px; border-radius: 0 7px 0 0;
+  background: color-mix(in srgb, var(--sec) 12%, var(--card));
+  border-bottom: 1px solid color-mix(in srgb, var(--sec) 30%, var(--border));
+}
+#result details.card:is(#history, #netboxBox, #confirm):not([open]) > summary { margin-bottom: -10px; border-bottom: 0; border-radius: 0 7px 7px 0; }
+#result .card:is(#request, #server, #bmcBox, #steps, #parts, #rmaBox, #history, #netboxBox, #confirm) { margin-bottom: 12px; }
+.jump-link.done { border-style: dashed; }
+.jump-link.done:not(.active) { opacity: .75; }

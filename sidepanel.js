@@ -208,6 +208,21 @@ function updateJump() {
       target.scrollIntoView({ behavior: "smooth", block: "start" });
     } }, label)));
   }
+  // Progress on the chips: steps ticked ("✅ Steps 2/5", "✓" when all are), RMA ticket created.
+  for (const b of nav.children) {
+    const [label] = JUMPS.find(([, id]) => id === b.dataset.for), box = $(b.dataset.for);
+    let extra = "";
+    if (b.dataset.for === "steps") {
+      const [done, all] = (box.querySelector(".count")?.textContent || "").split("/").map(Number);
+      extra = all ? (done === all ? " ✓" : ` ${done}/${all}`) : "";
+      b.classList.toggle("done", !!all && done === all);
+    }
+    if (b.dataset.for === "rmaBox") {
+      extra = box.querySelector(".rma-result") ? " ✓" : "";
+      b.classList.toggle("done", !!extra);
+    }
+    if (b.textContent !== label + extra) b.textContent = label + extra;
+  }
   markCurrent();
 }
 let jumpFrame;
