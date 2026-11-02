@@ -343,9 +343,10 @@ button.link.part-open { margin-left: auto; display: inline-flex; gap: 3px; }
 .rma-intro { font-size: 12px; }
 .rma-form, .rma-review { margin-top: 6px; display: flex; flex-direction: column; gap: 6px; }
 .rma-sub { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin-top: 6px; }
-.rma-row { display: flex; align-items: center; gap: 8px; }
-.rma-k { flex: 0 0 120px; font-size: 12px; color: var(--muted); }
-.rma-row .bmc-in { flex: 1; font-size: 13px; padding: 5px 7px; }
+.rma-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.rma-k { flex: 0 0 96px; font-size: 12px; color: var(--muted); }
+.rma-row .bmc-in { flex: 1 1 calc(100% - 104px); min-width: 0; font-size: 13px; padding: 5px 7px; }
+.rma-row > .rma-src { margin-left: 104px; white-space: normal; } /* where the value came from: on its own line, under the box */
 .rma-desc { width: 100%; box-sizing: border-box; font-size: 13px; padding: 6px 7px; resize: vertical; }
 .rma-partname { font-size: 12px; margin-left: 128px; }
 .rma-choices { font-size: 12px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 4px 10px; }
@@ -362,7 +363,7 @@ button.link.part-open { margin-left: auto; display: inline-flex; gap: 3px; }
 .rma-ainote { font-size: 12px; }
 .rma-src { flex: none; font-size: 10.5px; padding: 1px 6px; border-radius: 10px; border: 1px solid var(--border); color: var(--muted); white-space: nowrap; }
 .rma-src.ai { border-color: var(--accent); color: var(--accent); }
-.nb-v .rma-src { margin-left: 6px; }
+.nb-v .rma-src { margin-left: 6px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; } /* not the serial's mono font */
 .rma-confirm { display: flex; gap: 6px; align-items: flex-start; font-size: 12.5px; margin-top: 8px; }
 .rma-existing { font-size: 12.5px; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--accent); display: flex; flex-direction: column; gap: 4px; }
 .rma-target { display: flex; gap: 6px; align-items: center; }

@@ -50,28 +50,37 @@ The brief streams in as the AI writes it. Results, checklist ticks and chats are
 - **✨ Ask AI which part** / "Which part do I need to swap?": the chat works out the failing component (ticket, comments, BMC, server's catalog entry, NetBox journal), searches the catalog for it and answers with the most likely part (Lambda P/N first). **NetBox stock for the parts the answer names is then looked up and shown under it** (this site first, with locations). A 🔎 note shows what it searched. Part types are recognised by name, Lambda P/N family (206 GPUs, 204 GPU baseboards, 205 CPUs, 207 memory, 208/209 drives, 211 NICs, 214 PSUs, 216/236–238 cables & optics; 201/203 whole systems) and legacy SKU prefix (GPU, RAM, DDR = drives, PSU, FAN, NIC, MBD, CPU, CB* = cables; CSN/DGX = whole systems).
 
 ### RMA
-After swapping a failed part, **🔁 RMA → Create RMA ticket…** (under Parts) opens the RMA ticket for this DC ticket.
-- **No RMA yet:** creates the RMA ticket in the **RMA** project as the kind you choose (**Advance Replacement** by default; also CRU, Manufacturing Repair, Onsite Warranty, Return to Vendor), copies the server details from the DC ticket (every field both have: hostname, chassis SN, device type, site, location, data center, NetBox links, IPs, rack), fills in Faulty Part SN, Replacement SN, Faulty Part Number, MPN, Component Issue and RMA type, and links it to the DC ticket (**relates to**).
-- **The ticket already has an RMA ticket** (linked to it or to one of its sub-tasks): no new one is created; the details are added to that RMA ticket as an **internal comment** (pick which one if there are several). A swap already on that RMA ticket (its old and new S/N in the same comment, its description or its S/N fields) is skipped: the form proposes the next swap the ticket mentions that it doesn't have yet, or says there's nothing new to add.
-- **The swap comes from one comment:** the old and new S/N are taken from the same comment (the tech who swapped writes both, e.g. "OLD: X / New: Y"), never one from here and one from there. Each S/N shows whose comment it came from.
-- **The part comes from the whole ticket, checked against the catalog:** Lambda P/Ns, SKUs and MPNs named anywhere in the ticket, and catalog descriptions in its sentences ("Switch board is replaced"), are listed first, those in the swap comment ahead of the rest. Parts that don't fit the server go to the bottom.
-- **The catalog list is never left empty:** with no description match it lists the catalog parts for the chosen Component that fit the server; typing a Lambda P/N, SKU or MPN finds that part.
-- **Pre-filled, then confirmed by you.** Each value shows where it came from until you edit it:
-  - **Part number** (Lambda P/N, MPN): always a **catalog** part (the source of truth), settled in this order:
-    1. **NetBox, by serial**: the new S/N (the spare you installed: inventory asset "<P/N>_<serial>") or the old S/N (an installed module) gives the exact P/N.
-    2. A part you ticked **Used**, or the BMC's failed part whose MPN is in the catalog exactly.
-    3. **What techs used before** on the same server model for the same component (past RMA tickets), when one catalog part clearly dominates; every option shows "used N× on <model>".
-    4. An exact, unambiguous **catalog description** match. Every word of the description must be in the catalog entry, specs must not conflict (80GB vs 141GB, H100 vs H200, DDR4 vs DDR5, SXM vs PCIe), and the part must **fit the server** (an SXM4/A100 part is tagged "doesn't fit this server" in an H100/SXM5 server and never filled in).
-    5. Otherwise **you choose** from the list (tags: NetBox ✓, used N×, exact, same description as …, EOL → replacement, doesn't fit this server).
-    A part you pick yourself is never replaced; if NetBox or the history disagree, you get a warning. A Lambda P/N fills in the MPN and name, and an MPN fills in the Lambda P/N.
-  - **Old S/N**: the BMC's serial for the failed component (helper 1.6.2+), or the ticket ("replace GPU SN …", "removed SN …", "OLD: …"). If the ticket and the BMC disagree, it warns you.
-  - **New S/N**: the ticket or its comments ("installed / new SN …", "New: …").
-  - **Description**, component, RMA type: from the ticket and the BMC, then the **AI** fills in or improves what's missing. Serials the AI suggests are kept only if they appear in the ticket or BMC data.
-  - Anything you type is never replaced by a suggestion.
-- A **review** screen lists every value with its source. **Create** (or **Add to RMA-…**) stays disabled until you tick "I checked the part number and both serial numbers against the parts". Nothing is sent to Jira before that.
-- Links to the RMA ticket appear in the card and go into **Copy as Jira comment**.
-- **↺ Reset** (in the card header) clears the form, suggestions, errors and the last result, and starts over. Nothing in Jira changes.
-- Everything runs in your Jira tab with your login. Fields are found by name. If linking fails, it tells you the RMA ticket was created and to link it in Jira.
+After swapping a failed part, open an RMA ticket for it without leaving the DC ticket. Everything is pre-filled; you check it and confirm. Nothing is sent to Jira before you do.
+
+**How to use it**
+1. In the **🔁 RMA** card (pink, under Parts), click **Create RMA ticket…**.
+2. Check the form: the failed part, the old and new S/N, a description, the component. Each value shows where it came from (e.g. "from Hadi Khodja's comment", "NetBox ✓ new S/N", "catalog: exact description") until you edit it.
+3. **Review →** lists every value. Tick "I checked the part number and both serial numbers against the parts", then **✅ Create RMA ticket** (or **✅ Add to RMA-…**).
+4. The RMA link shows in the card and goes into **Copy as Jira comment**. **↺ Reset** starts over (nothing in Jira changes).
+
+**What it does in Jira**
+- **No RMA yet:** creates one ticket in the **RMA** project, of the kind you choose (**Advance Replacement** by default; also CRU, Manufacturing Repair, Onsite Warranty, Return to Vendor). It copies the server details from the DC ticket (every field both have: hostname, chassis SN, device type, site, location, data center, NetBox links, IPs, rack), fills in Faulty Part SN, Replacement SN, Faulty Part Number, MPN, Component Issue and RMA type, and links it to the DC ticket (**relates to**). No other DC ticket is created.
+- **The DC ticket already has an RMA** (linked to it or to one of its sub-tasks): no new ticket. The part and serials are added to that RMA as an **internal comment** (pick which RMA if there are several).
+  - The serials already on that RMA are listed. A swap counts as already there when its old **and** new S/N are in the same comment (or its description or S/N fields); it is skipped and the next swap the ticket mentions is proposed. If every swap is there, it says there's nothing new to add.
+
+**The serial numbers: from one comment**
+- The old and new S/N are taken from the **same comment**: the tech who swapped writes both ("Old s/n: X / New s/n: Y", "OLD: X New: Y"). Never one from one comment and one from another.
+- A tech's comment beats the ticket description (which only names the failed part, e.g. "requesting replacement of GPU 8 (SN …)"). A serial can never be both old and new.
+- The BMC's serial for the failed component (helper 1.6.2+) can also give the old S/N; if it disagrees with the ticket, you get a warning.
+- Serials the AI suggests are kept only if they appear in the ticket or BMC data.
+
+**The part number: the catalog is the source of truth**
+The Lambda P/N and MPN are always a **catalog** part, settled in this order:
+1. **NetBox, by serial:** the new S/N (the spare you installed: inventory asset "<P/N>_<serial>") or the old S/N (an installed module) gives the exact P/N.
+2. A part you ticked **Used**, or the BMC's failed part whose MPN is in the catalog exactly.
+3. **A P/N, SKU or MPN named in the ticket**, the swap comment first ("Replaced 211-000027").
+4. **What techs used before** on the same server model for the same component (past RMA tickets), when one part clearly dominates ("used N× on <model>").
+5. **An exact, unambiguous catalog description** match, from the ticket's sentences ("Switch board is replaced") or the description you type. Only words the catalog uses count; every word must be in the entry; specs must not conflict (80GB vs 141GB, H100 vs H200, DDR4 vs DDR5, SXM vs PCIe); and the part must **fit the server** (an SXM4/A100 part in an H100/SXM5 server is tagged "doesn't fit this server", listed last and never filled in).
+6. Otherwise **you choose** from the list. It's never empty: with no description match it lists the catalog parts for the chosen Component that fit the server, and typing a Lambda P/N, SKU or MPN finds that part. Tags: NetBox ✓, P/N named in the swap comment, used N×, exact, same description as …, EOL → replacement, doesn't fit this server.
+
+A part you pick yourself is never replaced; if NetBox or the history disagree, you get a warning. A Lambda P/N fills in the MPN and name, and an MPN fills in the Lambda P/N. Anything you type is never replaced by a suggestion.
+
+**Checks before anything is sent:** both serials and a part number are required; the same S/N can't be old and new; a swap already on the existing RMA is refused. Everything runs in your Jira tab with your login, and fields are found by name. If linking fails, it tells you the RMA ticket was created and to link it in Jira.
 
 ### NetBox
 Status, model, site/rack/RU, serial, Lambda SKU, asset tag, tenant/cluster, IPs, interfaces & cabling, **📝 Journal** (work history; lines with passwords are removed), **🧩 Modules** (mostly switch transceivers; NetBox doesn't record GPUs/DIMMs in servers) and the last **Podcrawler** activity (**Open** copies the hostname). Read-only.
