@@ -1,7 +1,7 @@
 // Side panel: detects the open Jira issue, reads it (fields, comments, history), asks the selected AI provider
 // for a DC Ops brief and renders it, then runs the lookups around it: NetBox, ping, BMC, parts catalog & stock.
 // Sections: Jira · AI · progress line & jump links · status, toast, people · NetBox · parts · BMC · reachability ·
-// update banner · start screen (no ticket) · analyze & tab events.
+// RMA · update banner · start screen (no ticket) · analyze & tab events.
 
 const $ = (id) => document.getElementById(id);
 let current = { tabId: null, key: null, running: false };
@@ -336,6 +336,7 @@ async function startLookups(key, entry, force = false) {
   if (run !== lookupRun || current.key !== key) return;
   setupBmc(key, entry, nb);
   setupParts(key, entry, nb);
+  setupRma(key, entry);
   setupPing(key, entry.brief, entry.ticketIps || [], netboxPingTargets(nb));
 }
 
@@ -403,9 +404,288 @@ async function setupParts(key, entry, nb) {
     state.loading = false;
     if (current.key === key) draw();
   };
-  partsView = { key, update: () => { match(); draw(); } };
+  partsView = { key, state, update: () => { match(); draw(); } };
   draw();
   await load(false);
+}
+
+// ---------- RMA (Component Replacement under the ticket → Jira Automation opens the RMA ticket) ----------
+
+async function setupRma(key, entry) {
+  const store = `rma:${key}`;
+  const project = key.split("-")[0];
+  const state = { step: "idle", key, progress: [], choices: [], form: {}, sources: {}, touched: new Set(), result: (await chrome.storage.session.get(store))[store] || null };
+  if (state.result) state.step = "done";
+  const box = () => (current.key === key ? document.getElementById("rmaBox") : null);
+  // Redraws keep the cursor where it was (the AI's suggestions can arrive while you type).
+  const draw = () => {
+    const el = document.activeElement, key_ = el?.dataset?.key, pos = el?.selectionEnd;
+    renderRma(box(), state, actions);
+    const again = key_ && box()?.querySelector(`[data-key="${key_}"]`);
+    if (again) { again.focus(); try { again.setSelectionRange(pos, pos); } catch {} }
+  };
+  const jira = (op, args) => rmaJira(current.tabId, op, args);
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const step = (text, s = "run") => { state.progress.push({ text, state: s }); draw(); return state.progress.at(-1); };
+  const fieldId = (name) => state.meta.fields[RMA_FIELD_NAMES[name]]?.id;
+
+  // Parts to start from: the ones ticked "Used", else the catalog matches the BMC reports as failed, else the others.
+  // Parts known for certain: ticked "Used", or the BMC's failed part whose MPN is in the catalog exactly.
+  // Anything else is found by its description (rmaCatalogPicker), never guessed.
+  const catalog = () => (partsView?.key === key ? partsView.state.catalog : null);
+  const choices = () => {
+    const ps = partsView?.key === key ? partsView.state : null, out = [];
+    const add = (p, src) => { if (p && !isWholeSystem(p) && !out.some((o) => partId(o) === partId(p))) out.push({ ...p, _src: src }); };
+    for (const p of ps?.used?.values() || []) add(p, "part marked Used");
+    for (const x of bmcProblems()) add(inCatalog("mpn", x.part_number), `catalog: MPN from BMC (${x.name})`);
+    return out.slice(0, 6);
+  };
+  const inCatalog = (k, v) => {
+    const cat = catalog();
+    if (!cat || !v) return null;
+    return cat.parts.find((p) => normPn(k === "lambda" ? p.lambda : p.mpn) === normPn(v)) || null; // exact only
+  };
+  // A Lambda P/N gives the MPN and name, and an MPN gives the Lambda P/N, from the catalog.
+  const crossFill = () => {
+    const f = state.form;
+    if (!f.lambda && f.mpn) { const p = inCatalog("mpn", f.mpn); if (p?.lambda) suggest("lambda", p.lambda, "catalog, from MPN"); }
+    if (f.lambda && !f.mpn) { const p = inCatalog("lambda", f.lambda); if (p?.mpn) suggest("mpn", p.mpn, "catalog, from Lambda P/N"); }
+    const named = inCatalog("lambda", f.lambda);
+    if (named) f.partName = [named.vendor, named.name].filter(Boolean).join(" ");
+  };
+  // Pre-filled values and where they came from (shown next to each field until the user edits it).
+  const suggest = (k, value, source, { replace = false } = {}) => {
+    if (!value || state.touched.has(k)) return false;
+    if (state.form[k] && !replace && !/guess|default/.test(state.sources[k] || "")) return false; // keep the stronger source
+    state.form[k] = value;
+    state.sources[k] = source;
+    return true;
+  };
+  const bmcProblems = () => Object.values(lastResult?.key === key ? lastResult.bmc || {} : {}).filter((x) => x?.ok).flatMap((x) => x.problems);
+  const usePart = (p, source) => {
+    for (const k of ["lambda", "mpn", "component"]) if (!state.touched.has(k)) { delete state.form[k]; delete state.sources[k]; }
+    state.form.partName = p ? [p.vendor, p.name].filter(Boolean).join(" ") : "";
+    if (p && !state.touched.has("partDesc")) { state.form.partDesc = state.form.partName; state.sources.partDesc = source; }
+    suggest("lambda", p?.lambda, source);
+    suggest("mpn", p?.mpn || p?.vendorPn, source);
+    suggest("component", guessComponent(state.meta.fields[RMA_FIELD_NAMES.component]?.options || [], p, entry.issueText || ""), "guessed");
+    // The failed part the BMC reports: its own serial is the old S/N (helper 1.6.2+), its part number the MPN.
+    const kind = /^206|^204/.test(p?.lambda || "") ? /gpu|processor/i : /^207/.test(p?.lambda || "") ? /memory|dimm/i : /^20[89]/.test(p?.lambda || "") ? /storage|drive/i : null;
+    const probs = bmcProblems();
+    const prob = probs.find((x) => kind?.test(`${x.component} ${x.name}`) && x.serial) || (probs.length === 1 ? probs[0] : null);
+    if (prob?.serial) suggest("oldSn", cleanSn(prob.serial), `from BMC (${prob.name})`, { replace: /BMC/.test(state.sources.oldSn || "") });
+    if (prob?.part_number) suggest("mpn", prob.part_number, `from BMC (${prob.name})`);
+  };
+  // The failed part's description: the BMC's model for it, or the brief's parts list, whichever matches the catalog best.
+  const seedDescription = () => {
+    const texts = [...bmcProblems().map((x) => x.detail).filter((d) => /[a-z]{2,}.*\s/i.test(d || "")), ...entry.brief.parts_tools];
+    let best = "", top = 0;
+    for (const t of texts) {
+      const m = catalogByDescription(catalog(), t, 1)[0];
+      if (m && m.score > top) { best = t; top = m.score; }
+    }
+    return best;
+  };
+  // Fill the part in only when the description matches one catalog description exactly and nothing else comes close
+  // (e.g. two 64GB DDR5-4800 DIMMs from different vendors): otherwise the user chooses from the list.
+  const autoFromDescription = (source) => {
+    if (state.touched.has("lambda")) return;
+    const all = catalogByDescription(catalog(), state.form.partDesc, 20);
+    const exact = all.filter((m) => m.exact);
+    if (!exact.length) return;
+    const same = exact.filter((m) => descKey(m.part) === descKey(exact[0].part));
+    if (same.length < exact.length) return; // different parts fit: the user chooses
+    if (all.some((m) => !same.includes(m) && m.coverage >= 0.75)) return; // another part is close: the user chooses
+    const pick = same.find((m) => !m.part.inactive) || same[0];
+    for (const k of ["lambda", "mpn"]) { delete state.form[k]; delete state.sources[k]; }
+    usePart(pick.part, source);
+    const others = [...new Set([...same.map((m) => partId(m.part)), ...pick.sameAs])].filter((id) => id !== partId(pick.part));
+    if (others.length) state.warnings.push(`The same description is also listed under ${others.join(", ")}. Check which P/N is on the part you swapped.`);
+  };
+  const failure = () => {
+    const b = entry.brief;
+    const bmc = bmcProblems().map((p) => `BMC: ${p.name.includes(p.component) ? p.name : `${p.component} ${p.name}`} ${p.health}${p.detail ? `: ${p.detail}` : ""}`);
+    return [b.request_summary, b.probable_cause && `Probable cause: ${b.probable_cause}`, ...bmc].filter(Boolean).join("\n");
+  };
+  // The AI reads the ticket, the BMC and the catalog candidates for what's still missing; serials it can't point to are dropped.
+  let aiRun = 0;
+  const aiPrefill = async () => {
+    const settings = await getSettings();
+    if (missingConfig(settings)) return;
+    const run = ++aiRun;
+    Object.assign(state, { aiBusy: true, aiNote: "" });
+    draw();
+    const opts = (n) => state.meta.fields[RMA_FIELD_NAMES[n]]?.options || [];
+    const bmcText = bmcProblems().map((p) => `${p.component} ${p.name} ${p.health} ${p.detail} SN ${p.serial || "?"} PN ${p.part_number || "?"}`).join("; ");
+    const sourceText = `${entry.issueText || ""} ${bmcText}`;
+    let filled = 0, note = "";
+    try {
+      const r = await rmaAiPrefill(settings, makeRedactor(settings, entry.people), {
+        key, issueText: entry.issueText, bmc: bmcText, components: opts("component"), rmaTypes: opts("rmaType"),
+        parts: [...state.choices, ...(catalog() ? catalogRowsFor(catalog(), [entry.issueText, entry.brief.request_summary, ...entry.brief.parts_tools, bmcText]) : [])]
+          .filter((p, i, all) => !isWholeSystem(p) && all.findIndex((q) => partId(q) === partId(p)) === i).slice(0, 20)
+          .map((p) => `${p.lambda || "-"} | ${p.legacy || "-"} | ${p.mpn || "-"} | ${[p.vendor, p.name].filter(Boolean).join(" ")}`).join("\n")
+      });
+      if (run !== aiRun || state.step !== "form") return;
+      const AI = "✨ AI: check";
+      // The AI describes the part; the catalog decides the P/N (only on an exact description match).
+      if (!state.form.lambda && suggest("partDesc", r.part_description, AI)) { filled++; autoFromDescription("catalog: exact description (AI)"); }
+      filled += suggest("mpn", r.mpn, AI);
+      if (serialIn(r.old_sn, sourceText)) filled += suggest("oldSn", cleanSn(r.old_sn), AI);
+      if (serialIn(r.new_sn, sourceText)) filled += suggest("newSn", cleanSn(r.new_sn), AI);
+      if (opts("component").includes(r.component)) filled += suggest("component", r.component, AI);
+      if (["Yes", "No"].includes(r.ship_replacement)) filled += suggest("ship", r.ship_replacement, AI);
+      if (opts("rmaType").includes(r.rma_type)) filled += suggest("rmaType", r.rma_type, AI);
+      if (String(r.description || "").trim().length > 15) filled += suggest("description", r.description.trim(), AI, { replace: !state.touched.has("description") });
+      crossFill();
+      note = filled ? `✨ The AI filled in or improved ${filled} field${filled === 1 ? "" : "s"}. Check them.` : "✨ The AI found nothing more to fill in.";
+    } catch (e) {
+      if (run !== aiRun) return;
+      note = `✨ The AI couldn't help (${e.message}). Fill in the rest yourself.`;
+    }
+    Object.assign(state, { aiBusy: false, aiNote: note });
+    if (state.step === "form") draw();
+  };
+
+  // The ticket already has an RMA ticket: add the part and serials to it as an internal comment.
+  const addToExisting = async (f) => {
+    const target = state.target;
+    Object.assign(state, { step: "running", error: "", progress: [] });
+    const s = step(`Adding the part and serials to ${target}…`);
+    const r = await jira("comment", { key: target, body: rmaComment(f, key) });
+    if (!r.ok) {
+      s.state = "err";
+      Object.assign(state, { step: "review", error: `Couldn't add the comment: ${r.error}` });
+      return draw();
+    }
+    Object.assign(s, { state: "ok", text: `Added to ${target} as an internal comment (no new RMA ticket)` });
+    state.result = { links: [target], added: true, part: f.partName || f.lambda || f.mpn, oldSn: f.oldSn, newSn: f.newSn };
+    await chrome.storage.session.set({ [store]: state.result });
+    if (lastResult?.key === key) lastResult.rma = state.result;
+    toast(`Added to ${target}.`, 4000);
+    state.step = "done";
+    draw();
+  };
+
+  const actions = {
+    onStart: async () => {
+      Object.assign(state, { step: "loading", error: "", progress: [], problems: [] });
+      draw();
+      const meta = await jira("meta", { project, typeNames: RMA_TYPES });
+      if (!meta.ok) return Object.assign(state, { step: state.result ? "done" : "idle", error: `Couldn't read the RMA fields: ${meta.error}` }) && draw();
+      if (!meta.fields[RMA_FIELD_NAMES.qualifies]) {
+        Object.assign(state, { step: "idle", error: `${project} tickets don't have the RMA fields (“${RMA_FIELD_NAMES.qualifies}”). Start the RMA in Jira.` });
+        return draw();
+      }
+      // An RMA ticket already open for this ticket: add to it instead of creating another.
+      const existing = await jira("existing", { key, rmaProject: RMA_PROJECT });
+      if (!existing.ok) return Object.assign(state, { step: state.result ? "done" : "idle", error: `Couldn't check for an existing RMA: ${existing.error}` }) && draw();
+      Object.assign(state, { meta, existing: existing.rmas, target: existing.rmas[0]?.key, choices: choices(), form: {}, sources: {}, touched: new Set(), aiNote: "" });
+      const first = state.choices[0];
+      state.catalog = catalog();
+      state.warnings = [];
+      if (first) usePart(first, first._src);
+      else {
+        suggest("partDesc", seedDescription(), "from ticket/BMC");
+        autoFromDescription("catalog: exact description");
+      }
+      // These don't depend on the exact P/N: the BMC's failed part gives the old S/N, the description the component.
+      const probs = bmcProblems().filter((x) => x.serial);
+      if (probs.length === 1) suggest("oldSn", cleanSn(probs[0].serial), `from BMC (${probs[0].name})`);
+      suggest("component", guessComponent(state.meta.fields[RMA_FIELD_NAMES.component]?.options || [], { name: state.form.partDesc }, entry.issueText || ""), "guessed");
+      crossFill();
+      suggest("description", failure(), "from ticket & BMC");
+      const inTicket = serialsInText(entry.issueText);
+      suggest("oldSn", inTicket.oldSn, "from ticket");
+      suggest("newSn", inTicket.newSn, "from ticket");
+      suggest("ship", "Yes", "default: check"); // most RMAs get a replacement shipped; the AI may say otherwise
+      // The ticket and the BMC disagree about the old S/N: say so instead of silently picking one.
+      if (inTicket.oldSn && state.form.oldSn && inTicket.oldSn !== state.form.oldSn) {
+        state.warnings.push(`The ticket mentions old S/N ${inTicket.oldSn}, but the BMC reports ${state.form.oldSn}. Check the label on the part you removed.`);
+      }
+      state.step = "form";
+      draw();
+      aiPrefill();
+    },
+    onPickPart: (p, src) => {
+      for (const k of ["lambda", "mpn"]) { state.touched.delete(k); delete state.form[k]; delete state.sources[k]; }
+      state.warnings = state.warnings.filter((w) => !/same description/.test(w));
+      usePart(p, src || "picked from catalog");
+      crossFill();
+      draw();
+    },
+    // Clear the card: form, suggestions, errors and the saved result. Nothing in Jira changes.
+    onReset: async () => {
+      aiRun++;
+      Object.assign(state, { step: "idle", error: "", progress: [], problems: [], warnings: [], form: {}, sources: {}, touched: new Set(),
+        existing: null, target: null, aiBusy: false, aiNote: "", result: null });
+      await chrome.storage.session.remove(store);
+      if (lastResult?.key === key) lastResult.rma = null;
+      draw();
+    },
+    onCancel: () => { aiRun++; Object.assign(state, { step: state.result ? "done" : "idle", problems: [], aiBusy: false }); draw(); },
+    onReview: () => {
+      const f = state.form;
+      Object.assign(f, { lambda: String(f.lambda || "").trim(), mpn: String(f.mpn || "").trim(), oldSn: cleanSn(f.oldSn), newSn: cleanSn(f.newSn), description: String(f.description || "").trim() });
+      state.problems = rmaProblems(f);
+      if (!state.problems.length) aiRun++; // a late AI answer must not change values you're reviewing
+      state.step = state.problems.length ? "form" : "review";
+      state.aiBusy = false;
+      draw();
+    },
+    onEdit: () => { state.step = "form"; draw(); },
+    onCreate: async () => {
+      const f = state.form;
+      if (state.existing?.length) return addToExisting(f);
+      Object.assign(state, { step: "running", error: "", progress: [] });
+      let child = null, current_;
+      try {
+        current_ = step(`Creating the ${state.meta.type.name} under ${key}…`);
+        const created = await jira("create", { fields: { project: { key: project }, parent: { key }, issuetype: { id: state.meta.type.id },
+          summary: rmaSummary(f), description: rmaDescription(f, key) } });
+        if (!created.ok) throw new Error(created.error);
+        child = created.key;
+        Object.assign(current_, { state: "ok", text: `Created ${child}` });
+        current_ = step("Waiting for Jira to copy the server details…");
+        await wait(RMA_AUTOMATION_WAIT_MS);
+        current_.state = "ok";
+        current_ = step("Filling in the part and serial numbers…");
+        // Only fields with a value: an empty one would clear what's already there.
+        const fields = {};
+        for (const k of ["mpn", "oldSn", "newSn"]) if (f[k] && fieldId(k)) fields[fieldId(k)] = f[k];
+        for (const k of ["component", "ship", "rmaType"]) if (f[k] && fieldId(k)) fields[fieldId(k)] = { value: f[k] };
+        const filled = await jira("update", { key: child, fields });
+        if (!filled.ok) throw new Error(filled.error);
+        Object.assign(current_, { state: "ok", text: "Filled in the part and serial numbers" });
+        current_ = step("Marking it as qualifying for RMA…");
+        const marked = await jira("update", { key: child, fields: { [fieldId("qualifies")]: { value: "Yes" } } });
+        if (!marked.ok) throw new Error(marked.error);
+        Object.assign(current_, { state: "ok", text: "Marked as qualifying for RMA" });
+        current_ = step("Waiting for Jira to open the RMA ticket…");
+        let rma = null, origin = "";
+        for (const end = Date.now() + RMA_TICKET_WAIT_MS; !rma && Date.now() < end;) {
+          await wait(3000);
+          const l = await jira("links", { key: child });
+          origin = l.origin || origin;
+          rma = (l.keys || []).find((k) => /^RMA-/i.test(k)) || null;
+        }
+        Object.assign(current_, rma ? { state: "ok", text: `RMA ticket ${rma} created` } : { state: "warn", text: `Jira hasn't opened the RMA ticket yet: check ${child} in a minute` });
+        state.result = { links: [child, rma].filter(Boolean), part: f.partName || f.lambda || f.mpn, oldSn: f.oldSn, newSn: f.newSn };
+        await chrome.storage.session.set({ [store]: state.result });
+        if (lastResult?.key === key) lastResult.rma = state.result;
+        toast(rma ? `${rma} created from ${child}.` : `${child} created and marked for RMA.`, 5000);
+      } catch (e) {
+        if (current_) current_.state = "err";
+        state.error = child ? `${e.message}. ${child} was created: finish it in Jira (part, serials, “${RMA_FIELD_NAMES.qualifies}” = Yes).` : e.message;
+        if (child) state.result = { links: [child], part: f.partName || f.lambda || f.mpn, oldSn: f.oldSn, newSn: f.newSn };
+      }
+      state.step = child ? "done" : "review";
+      draw();
+    },
+    openIssue: (k) => openUrl(`${current.origin}/browse/${k}`)
+  };
+  if (lastResult?.key === key && state.result) lastResult.rma = state.result;
+  draw();
 }
 
 // ---------- BMC (pasted login: Redfish health, remote console, power) ----------
@@ -743,7 +1023,7 @@ $("settingsBtn").addEventListener("click", () => chrome.runtime.openOptionsPage(
 async function copyComment() {
   if (!lastResult) return;
   const comment = [asJiraComment(lastResult.key, lastResult.brief, lastResult.ping, lastResult.netbox, lastResult.bmc, lastResult.bmcPower),
-    ...partsCommentLines(lastResult.partsUsed)].join("\n");
+    ...partsCommentLines(lastResult.partsUsed), ...rmaCommentLines(lastResult.rma)].join("\n");
   await navigator.clipboard.writeText(comment);
   $("copyBtn").textContent = "✅ Copied";
   toast("Copied. Paste it as a comment in the Jira ticket.", 3000);

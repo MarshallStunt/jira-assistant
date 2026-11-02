@@ -1,0 +1,420 @@
+// RMA card: starts an RMA the way techs do it in Jira, from the open DC ticket.
+// 1. Asks for the failed part (Lambda P/N, MPN), the old S/N, the new S/N and a description, and shows everything for review.
+// 2. Creates a "Component Replacement" under the ticket. Jira Automation copies the server details from the parent.
+// 3. Fills in the MPN and both serials, then sets "Does this qualify for a RMA?" = Yes: Jira Automation then opens
+//    the RMA-xxxx ticket and links it. Everything runs in the Jira tab with the user's own login.
+// If the ticket already has an RMA ticket (linked to it or to one of its sub-tasks), no new one is created: the details
+// are added to that RMA ticket as an internal comment instead.
+// Fields are found by name, so nothing depends on this Jira's field IDs. "Lambda Part Number" is left alone:
+// Automation fills it with the server's own P/N.
+
+const RMA_FIELD_NAMES = {
+  mpn: "Manufacturer Part Number", oldSn: "Faulty Part SN", newSn: "Replacement SN", component: "Component Issue",
+  ship: "Ship a Replacement Unit to the DC?", rmaType: "RMA Type", qualifies: "Does this qualify for a RMA?"
+};
+const RMA_TYPES = ["Component Replacement", "Sub-task"]; // preferred child work item types, in order
+const RMA_PROJECT = "RMA"; // the project Automation opens RMA tickets in
+const RMA_AUTOMATION_WAIT_MS = 5000;  // Automation copies the parent's server details right after creation
+const RMA_TICKET_WAIT_MS = 45000;     // how long to wait for Automation's RMA-xxxx ticket
+
+// Runs inside the Jira tab (chrome.scripting), so it must be self-contained.
+async function rmaJiraInPage(op, a) {
+  const ctx = document.querySelector('meta[name="ajs-context-path"]')?.content || "";
+  const call = async (method, path, body) => {
+    const res = await fetch(ctx + path, { method, credentials: "include", body: body && JSON.stringify(body),
+      headers: { Accept: "application/json", "Content-Type": "application/json", "X-Atlassian-Token": "no-check" } });
+    const text = await res.text();
+    let data = null;
+    try { data = text ? JSON.parse(text) : null; } catch { /* not JSON */ }
+    if (!res.ok) {
+      const errs = data ? [...(data.errorMessages || []), ...Object.entries(data.errors || {}).map(([k, v]) => `${k}: ${v}`)] : [];
+      throw new Error(`Jira ${res.status}${errs.length ? `: ${errs.join("; ")}` : ""}`);
+    }
+    return data;
+  };
+  try {
+    if (op === "meta") {
+      const types = await call("GET", `/rest/api/3/issue/createmeta/${encodeURIComponent(a.project)}/issuetypes?maxResults=100`);
+      const list = types.issueTypes || types.values || [];
+      const type = a.typeNames.map((n) => list.find((t) => t.name === n)).find(Boolean);
+      if (!type) return { ok: false, error: `Project ${a.project} has no ${a.typeNames.join(" or ")} work item type.` };
+      // Jira returns at most 200 fields per request: page through them.
+      const fields = {};
+      for (let start = 0, more = true; more && start < 2000; start += 200) {
+        const meta = await call("GET", `/rest/api/3/issue/createmeta/${encodeURIComponent(a.project)}/issuetypes/${type.id}?maxResults=200&startAt=${start}`);
+        const page = meta.fields || meta.values || [];
+        for (const f of page) fields[f.name] = { id: f.fieldId, options: (f.allowedValues || []).map((v) => v.value || v.name).filter(Boolean) };
+        more = page.length === 200 && !meta.isLast;
+      }
+      return { ok: true, type: { id: type.id, name: type.name }, fields };
+    }
+    if (op === "create") return { ok: true, key: (await call("POST", "/rest/api/3/issue", { fields: a.fields })).key };
+    if (op === "update") { await call("PUT", `/rest/api/3/issue/${encodeURIComponent(a.key)}`, { fields: a.fields }); return { ok: true }; }
+    // RMA tickets already linked to the DC ticket or to its sub-tasks (where Automation links them).
+    if (op === "existing") {
+      const i = await call("GET", `/rest/api/3/issue/${encodeURIComponent(a.key)}?fields=issuelinks,subtasks`);
+      const linked = (x) => (x.fields?.issuelinks || []).map((l) => (l.outwardIssue || l.inwardIssue)?.key).filter(Boolean);
+      const keys = new Set(linked(i));
+      for (const sub of (i.fields.subtasks || []).slice(0, 20)) {
+        linked(await call("GET", `/rest/api/3/issue/${encodeURIComponent(sub.key)}?fields=issuelinks`)).forEach((k) => keys.add(k));
+      }
+      const rmas = [...keys].filter((k) => k.toUpperCase().startsWith(`${a.rmaProject.toUpperCase()}-`));
+      const out = [];
+      for (const k of rmas.slice(0, 5)) {
+        const r = await call("GET", `/rest/api/3/issue/${encodeURIComponent(k)}?fields=summary,status`);
+        out.push({ key: r.key, summary: r.fields.summary, status: r.fields.status?.name || "" });
+      }
+      return { ok: true, rmas: out };
+    }
+    // Internal comment (agents only) on a Jira Service Management ticket.
+    if (op === "comment") {
+      await call("POST", `/rest/api/3/issue/${encodeURIComponent(a.key)}/comment`, { body: a.body, properties: [{ key: "sd.public.comment", value: { internal: true } }] });
+      return { ok: true };
+    }
+    if (op === "links") {
+      const i = await call("GET", `/rest/api/3/issue/${encodeURIComponent(a.key)}?fields=issuelinks`);
+      const keys = (i.fields.issuelinks || []).map((l) => (l.outwardIssue || l.inwardIssue)?.key).filter(Boolean);
+      return { ok: true, keys, origin: location.origin + ctx };
+    }
+    return { ok: false, error: `Unknown operation ${op}` };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+async function rmaJira(tabId, op, args) {
+  try {
+    const [res] = await chrome.scripting.executeScript({ target: { tabId }, func: rmaJiraInPage, args: [op, args] });
+    return res?.result || { ok: false, error: "The Jira tab didn't answer. Keep the ticket open and try again." };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+// Best guess for "Component Issue" from the part and the ticket ("GPU fell off the bus" → "GPU - FALLEN OF BUS").
+function guessComponent(options, part, ticketText) {
+  const text = `${part?.name || ""} ${part?.desc || ""} ${part?.lambda || ""} ${part?.legacy || ""}`.toLowerCase();
+  const pick = (re) => options.find((o) => re.test(o));
+  const pn = String(part?.lambda || "").slice(0, 3);
+  if (/^204/.test(pn) || /baseboard|hgx/.test(text)) return pick(/^GPU Baseboard$/i);
+  if (/^206/.test(pn) || /\b(gpu|h100|h200|b200|b300|a100)\b/.test(text)) {
+    if (/fall(en)? off the bus|xid\s*79/i.test(ticketText)) return pick(/FALLEN/i) || pick(/^GPU$/i);
+    if (/not detected|missing gpu/i.test(ticketText)) return pick(/NOT DETECTED/i) || pick(/^GPU$/i);
+    if (/overheat|thermal/i.test(ticketText)) return pick(/OVERHEATING/i) || pick(/^GPU$/i);
+    if (/sram|uncorrectable/i.test(ticketText)) return pick(/SRAM/i) || pick(/^GPU$/i);
+    if (/missing memory|row remap/i.test(ticketText)) return pick(/MISSING MEMORY/i) || pick(/^GPU$/i);
+    return pick(/^GPU$/i);
+  }
+  const map = [[/^217|riser/, /Riser/i], [/backplane/, /BackPlane/i], [/pcie switch/, /PCIE Switch/i], [/\bm\.2\b/, /^M\.2$/i],
+    [/^207|dimm|memory|rdimm/, /^DIMM$/i], [/^20[89]|ssd|nvme|drive/, /SSD|NVME/i], [/^214|psu|power supply/, /^PSU$/i],
+    [/^211|connectx|nic|hca|bluefield|bf3/, /NIC|HCA/i], [/^205|cpu|xeon|epyc/, /^CPU$/i], [/^213|motherboard|mainboard/, /Motherboard/i],
+    [/fan/, /^Fan$/i], [/^23[68]|optic|transceiver|osfp|qsfp/, /Optic/i], [/cable/, /Cable/i]];
+  for (const [re, opt] of map) if (re.test(`${pn} ${text}`)) return pick(opt);
+  return "";
+}
+
+const cleanSn = (s) => String(s || "").trim().replace(/\s+/g, "").toUpperCase();
+
+function rmaSummary(f) {
+  const what = f.partName || [f.lambda, f.mpn].filter(Boolean).join(" ") || "part";
+  return `RMA ${what} SN ${f.oldSn}`.slice(0, 250);
+}
+
+// Jira's rich-text format for the description: one paragraph per line.
+function rmaDescription(f, key) {
+  const lines = [
+    ...String(f.description || "").split(/\n+/).map((l) => l.trim()).filter(Boolean),
+    `Failed part: ${[f.lambda && `Lambda P/N ${f.lambda}`, f.mpn && `MPN ${f.mpn}`, f.partName].filter(Boolean).join(" · ")}`,
+    `Faulty part S/N (old): ${f.oldSn}`,
+    `Replacement S/N (new): ${f.newSn}`,
+    `From ${key}, created with Lambda Rackside.`
+  ];
+  return { type: "doc", version: 1, content: lines.map((t) => ({ type: "paragraph", content: [{ type: "text", text: t }] })) };
+}
+
+// The comment added to an existing RMA ticket.
+function rmaComment(f, key) {
+  const lines = [
+    `Another part for this RMA, from ${key}:`,
+    `Failed part: ${[f.lambda && `Lambda P/N ${f.lambda}`, f.mpn && `MPN ${f.mpn}`, f.partName].filter(Boolean).join(" · ")}`,
+    `Faulty part S/N (old): ${f.oldSn}`,
+    `Replacement S/N (new): ${f.newSn}`,
+    [f.component && `Component: ${f.component}`, f.ship && `Ship a replacement: ${f.ship}`, f.rmaType && `RMA type: ${f.rmaType}`].filter(Boolean).join(" · "),
+    ...String(f.description || "").split(/\n+/).map((l) => l.trim()).filter(Boolean),
+    "Added with Lambda Rackside."
+  ].filter(Boolean);
+  return { type: "doc", version: 1, content: lines.map((t) => ({ type: "paragraph", content: [{ type: "text", text: t }] })) };
+}
+
+function rmaProblems(f) {
+  const out = [];
+  if (!f.lambda && !f.mpn) out.push("Enter the part's Lambda P/N or MPN.");
+  if (!f.oldSn) out.push("Enter the old (faulty) S/N.");
+  if (!f.newSn) out.push("Enter the new (replacement) S/N.");
+  if (f.oldSn && f.newSn && f.oldSn === f.newSn) out.push("The old and new S/N are the same.");
+  for (const [k, label] of [["oldSn", "old S/N"], ["newSn", "new S/N"]]) {
+    if (f[k] && (f[k].length < 4 || !/^[A-Z0-9._\/-]+$/.test(f[k]))) out.push(`The ${label} doesn't look like a serial number.`);
+  }
+  if (!f.ship) out.push("Choose whether a replacement unit should be shipped to the DC.");
+  if (String(f.description || "").trim().length < 10) out.push("Describe the failure in a few words.");
+  return out;
+}
+
+// state: { step: "idle" | "loading" | "form" | "review" | "running" | "done", meta, form, problems, progress, result, error }
+function renderRma(box, state, actions) {
+  if (!box) return;
+  box.innerHTML = "";
+  const canReset = ["form", "review", "done"].includes(state.step) || (state.step === "idle" && state.error);
+  box.appendChild(h("div", { class: "label rma-head" }, "🔁 RMA",
+    state.step === "idle" || state.step === "done" ? h("button", { class: "mini", onclick: actions.onStart }, state.step === "done" ? "Start another…" : "Create RMA ticket…") : null,
+    canReset ? h("button", { class: "mini", title: "Clear this card and start over (nothing in Jira changes)", onclick: actions.onReset }, "↺ Reset") : null));
+
+  if (state.error) box.appendChild(h("div", { class: "ping-msg bad" }, state.error));
+  if (state.step === "idle" && !state.result) {
+    box.appendChild(h("div", { class: "muted rma-intro" }, "After swapping a failed part: creates the Component Replacement under this ticket with the part and both serial numbers, and marks it for RMA so Jira opens the RMA ticket."));
+  }
+  if (state.step === "loading") box.appendChild(h("div", { class: "muted" }, h("span", { class: "spinner" }), "Reading the RMA fields from Jira…"));
+  if (state.step === "form") box.appendChild(rmaForm(state, actions));
+  if (state.step === "review") box.appendChild(rmaReview(state, actions));
+  if (state.step === "running" || state.step === "done") {
+    box.appendChild(h("ol", { class: "rma-progress" }, state.progress.map((p) => h("li", { class: p.state },
+      h("span", { class: "rma-mark" }, p.state === "ok" ? "✓" : p.state === "err" ? "✕" : p.state === "warn" ? "!" : "…"), " ", p.text))));
+  }
+  if (state.result?.links?.length) {
+    box.appendChild(h("div", { class: "rma-result" }, state.result.links.map((l) =>
+      h("button", { class: "mini", onclick: () => actions.openIssue(l) }, `${l} `, icon("external", 11)))));
+  }
+}
+
+// Part description box and the catalog parts that match it (best first). Click one to use it.
+function rmaCatalogPicker(state, actions) {
+  if (!state.catalog) return null;
+  const f = state.form;
+  const list = h("div", { class: "rma-cands" });
+  const show = () => {
+    const matches = catalogByDescription(state.catalog, f.partDesc);
+    list.replaceChildren(...(matches.length ? matches.map((m) => {
+      const p = m.part, chosen = f.lambda && p.lambda === f.lambda;
+      return h("button", { type: "button", class: `rma-cand${chosen ? " chosen" : ""}`, onclick: () => actions.onPickPart(p, m.exact ? "catalog: exact description" : "catalog: picked") },
+        h("b", {}, partId(p)), " ", [p.vendor, p.name].filter(Boolean).join(" "),
+        p.legacy && p.legacy !== partId(p) && h("span", { class: "muted" }, ` · ${p.legacy}`),
+        p.mpn && h("span", { class: "muted" }, ` · ${p.mpn}`),
+        m.exact && h("span", { class: "rma-tag ok" }, "exact"),
+        m.sameAs.length > 0 && h("span", { class: "rma-tag warn" }, `same description as ${m.sameAs.slice(0, 3).join(", ")}`),
+        p.inactive && h("span", { class: "rma-tag warn" }, p.replacedBy ? `EOL → ${p.replacedBy}` : "EOL"));
+    }) : [h("div", { class: "muted" }, f.partDesc ? "No catalog part matches this description. Try fewer or other words." : "Describe the failed part to find it in the catalog.")]));
+  };
+  const box = h("input", { class: "bmc-in", type: "text", spellcheck: "false", value: f.partDesc || "", "data-key": "partDesc", placeholder: "e.g. NVIDIA H100 80GB SXM5" });
+  const badge = rmaSource(state, "partDesc");
+  let t;
+  box.addEventListener("input", () => {
+    f.partDesc = box.value;
+    state.touched.add("partDesc");
+    badge?.remove();
+    clearTimeout(t);
+    t = setTimeout(show, 200);
+  });
+  show();
+  return h("div", { class: "rma-catalog" },
+    h("label", { class: "rma-row" }, h("span", { class: "rma-k" }, "Part description"), box, badge),
+    f.lambda ? h("div", { class: "muted rma-cands-head" }, "Matching parts in the catalog (the source of truth), best first:")
+      : h("div", { class: "rma-cands-head rma-choose" }, "👉 Choose the part you swapped from the catalog matches below (or refine the description):"),
+    list);
+}
+
+// Where a pre-filled value came from, shown next to the field until the user edits it.
+function rmaSource(state, key) {
+  const src = !state.touched.has(key) && state.sources[key];
+  return src ? h("span", { class: `rma-src${/AI/.test(src) ? " ai" : ""}` }, src) : null;
+}
+
+function rmaForm(state, actions) {
+  const f = state.form, opts = (name) => state.meta.fields[RMA_FIELD_NAMES[name]]?.options || [];
+  const edited = (key, el, badge) => {
+    f[key] = el.value;
+    state.touched.add(key); // the user's own value: never replaced by a suggestion
+    badge?.remove();
+  };
+  const row = (label, key, control) => {
+    const badge = rmaSource(state, key);
+    control.addEventListener(control.tagName === "SELECT" ? "change" : "input", () => edited(key, control, badge));
+    return h("label", { class: "rma-row" }, h("span", { class: "rma-k" }, label), control, badge);
+  };
+  const input = (key, attrs) => h("input", { class: "bmc-in", type: "text", spellcheck: "false", autocomplete: "off", value: f[key] || "", "data-key": key, ...attrs });
+  const select = (key, name, blank) => h("select", { class: "bmc-in", "data-key": key }, h("option", { value: "" }, blank),
+    opts(name).map((o) => h("option", { value: o, selected: f[key] === o ? "" : null }, o)));
+  const desc = h("textarea", { class: "bmc-in rma-desc", rows: "4", "data-key": "description", placeholder: "What failed and what you saw (errors, tests, what you swapped)" });
+  desc.value = f.description || "";
+  const descBadge = rmaSource(state, "description");
+  desc.addEventListener("input", () => edited("description", desc, descBadge));
+  const pickers = state.choices.length > 1 && h("div", { class: "rma-choices" }, "Parts: ", state.choices.map((p) =>
+    h("button", { class: "link", type: "button", onclick: () => actions.onPickPart(p) }, partId(p))));
+  const form = h("form", { class: "rma-form" },
+    state.existing?.length ? h("div", { class: "rma-existing" },
+      h("b", {}, `This ticket already has ${state.existing.length === 1 ? "an RMA ticket" : "RMA tickets"}: `),
+      state.existing.map((r) => h("label", { class: "rma-target" },
+        state.existing.length > 1 && (() => {
+          const radio = h("input", { type: "radio", name: "rmaTarget", checked: state.target === r.key ? "" : null });
+          radio.addEventListener("change", () => (state.target = r.key));
+          return radio;
+        })(),
+        h("b", {}, r.key), ` · ${r.status} · ${r.summary}`)),
+      h("div", {}, "No new RMA will be created: these details are added to it as an internal comment.")) : null,
+    h("div", { class: "rma-note" }, `Pre-filled from the ticket, the BMC, the catalog and the AI. Check every value: you confirm them before anything is ${state.existing?.length ? "added" : "created"}.`),
+    state.aiBusy && h("div", { class: "muted" }, h("span", { class: "spinner" }), "✨ Reading the ticket and BMC to fill in the rest…"),
+    state.aiNote && h("div", { class: "muted rma-ainote" }, state.aiNote),
+    h("div", { class: "rma-sub" }, "Failed part"),
+    pickers,
+    rmaCatalogPicker(state, actions),
+    row("Lambda P/N", "lambda", input("lambda", { placeholder: "e.g. 206-000503" })),
+    row("MPN", "mpn", input("mpn", { placeholder: "Manufacturer part number" })),
+    f.partName && h("div", { class: "muted rma-partname" }, f.partName),
+    h("div", { class: "rma-sub" }, "Serial numbers"),
+    row("Old S/N", "oldSn", input("oldSn", { placeholder: "Faulty part, the one you removed", class: "bmc-in mono" })),
+    row("New S/N", "newSn", input("newSn", { placeholder: "Replacement, the one you installed", class: "bmc-in mono" })),
+    h("div", { class: "rma-sub" }, "Description ", descBadge),
+    desc,
+    h("div", { class: "rma-sub" }, "RMA details"),
+    opts("component").length ? row("Component", "component", select("component", "component", "Choose…")) : null,
+    opts("ship").length ? row("Ship a replacement?", "ship", select("ship", "ship", "Choose…")) : null,
+    opts("rmaType").length ? row("RMA type", "rmaType", select("rmaType", "rmaType", "(optional)")) : null,
+    state.warnings?.length ? h("ul", { class: "rma-warnings" }, state.warnings.map((w) => h("li", {}, "⚠️ ", w))) : null,
+    state.problems?.length ? h("ul", { class: "rma-problems" }, state.problems.map((p) => h("li", {}, p))) : null,
+    h("div", { class: "rma-buttons" },
+      h("button", { class: "primary", type: "submit" }, "Review →"),
+      h("button", { class: "mini", type: "button", onclick: actions.onCancel }, "Cancel")));
+  form.addEventListener("submit", (e) => { e.preventDefault(); actions.onReview(); });
+  return form;
+}
+
+function rmaReview(state, actions) {
+  const f = state.form;
+  const adding = !!state.existing?.length;
+  const rows = [
+    adding ? ["Adds", `An internal comment to ${state.target} (no new RMA ticket)`] : ["Creates", `${state.meta.type.name} under ${state.key}`],
+    !adding && ["Summary", rmaSummary(f)],
+    ["Failed part", [f.lambda && `Lambda P/N ${f.lambda}`, f.mpn && `MPN ${f.mpn}`].filter(Boolean).join(" · "), "lambda"],
+    ["Old S/N", f.oldSn, "oldSn"], ["New S/N", f.newSn, "newSn"],
+    ["Description", f.description, "description"],
+    ["Component", f.component, "component"], ["Ship a replacement", f.ship, "ship"], ["RMA type", f.rmaType, "rmaType"],
+    !adding && ["Then", "Sets “Does this qualify for a RMA?” = Yes, so Jira Automation opens the RMA ticket"]
+  ].filter((r) => r && r[1]);
+  const create = h("button", { class: "primary", disabled: "", onclick: actions.onCreate }, adding ? `✅ Add to ${state.target}` : "✅ Create RMA ticket");
+  const tick = h("input", { type: "checkbox" });
+  tick.addEventListener("change", () => (create.disabled = !tick.checked));
+  return h("div", { class: "rma-review" },
+    h("div", { class: "rma-sub" }, "Check before creating"),
+    h("div", { class: "nb-grid" }, rows.map(([k, v, key]) => [h("div", { class: "nb-k" }, k),
+      h("div", { class: `nb-v${/S\/N/.test(k) ? " mono" : ""}${k === "Description" ? " rma-desc-v" : ""}` }, v, key && rmaSource(state, key))])),
+    state.warnings?.length ? h("ul", { class: "rma-warnings" }, state.warnings.map((w) => h("li", {}, "⚠️ ", w))) : null,
+    h("label", { class: "rma-confirm" }, tick, " I checked the part number and both serial numbers against the parts."),
+    h("div", { class: "rma-buttons" }, create, h("button", { class: "mini", onclick: actions.onEdit }, "← Edit")));
+}
+
+// ---------- Matching the failed part to the catalog by its description ----------
+// The catalog is the source of truth. Every word of the failed part's description ("NVIDIA H100 80GB SXM5") must be in
+// the catalog entry (extra catalog words are fine), and specs must not conflict: 80GB vs 141GB, H100 vs H200, DDR4 vs
+// DDR5, 4800 vs 5600, SXM vs PCIe rule a part out. The same description can be listed under several P/Ns: shown together.
+
+// Words that say what kind of thing it is but that catalog entries often leave out ("ConnectX-7 400Gb" has no "NIC").
+const DESC_GENERIC = new Set(("gpu card module part parts unit units replacement new spare failed faulty bad the a an and for with of x pcs pc qty " +
+  "nic adapter hca memory drive disk").split(" "));
+function descTokens(s) {
+  const out = new Set();
+  const text = String(s || "").toLowerCase()
+    .replace(/(\d+)\s*(?:g|gbe|gbps|gb\/s)\b/g, "$1gb")                // 400G, 400GbE, 400Gb/s → 400gb
+    .replace(/(\d+(?:\.\d+)?)\s*(gb|tb|mb|w|kw|mhz|ghz|mt\/s|mm|ft)\b/g, "$1$2")
+    .replace(/\b([a-z]+)[\s-](\d)\b/g, "$1$2"); // ConnectX-7, ConnectX 7, BlueField-3 → connectx7, bluefield3
+  for (let t of text.split(/[^a-z0-9.+\/]+/)) {
+    t = t.replace(/^[./]+|[./]+$/g, "");
+    if (t.length < 2 || DESC_GENERIC.has(t)) continue;
+    out.add(t);
+    const bare = t.match(/^(\d+(?:\.\d+)?)(mhz|ghz|mt\/s)$/); // 4800mhz also matches a plain 4800
+    if (bare) out.add(bare[1]);
+  }
+  return out;
+}
+// Spec families: a part with a different value in the same family conflicts with the description.
+const SPEC_FAMILIES = [/^\d+(?:\.\d+)?(gb|tb)$/, /^\d+k?w$/, /^\d{4}(mhz|mt\/s)?$/, /^[abhlv]\d{2,3}[a-z]?$/, /^(sxm\d?|pcie|nvl\d*|oam)$/, /^ddr\d$/, /^gen\d$/, /^connectx\d$/, /^bluefield\d$/];
+function specConflict(q, pt) {
+  for (const fam of SPEC_FAMILIES) {
+    const a = [...q].filter((t) => fam.test(t)), b = [...pt].filter((t) => fam.test(t));
+    if (a.length && b.length && !a.some((t) => b.includes(t))) return true;
+  }
+  return false;
+}
+const descKey = (p) => [...descTokens(`${p.vendor} ${p.name} ${p.desc}`)].sort().join(" ");
+
+// Catalog parts whose description best matches `text`, best first: [{ part, score, exact, sameAs: [other P/Ns with that description] }].
+function catalogByDescription(catalog, text, limit = 6) {
+  const q = descTokens(text);
+  if (!catalog || !q.size) return [];
+  const found = [];
+  for (const p of catalog.parts) {
+    if (isWholeSystem(p)) continue;
+    const pt = descTokens(`${p.vendor} ${p.name} ${p.desc} ${p.mpn}`);
+    const common = [...q].filter((t) => pt.has(t)).length;
+    if (!common || specConflict(q, pt)) continue;
+    const coverage = common / q.size;                 // how much of the description the part has
+    const tight = common / pt.size;                   // prefer entries without much else
+    const score = coverage + 0.15 * tight - (p.inactive ? 0.05 : 0) + (p.lambda ? 0.02 : 0);
+    if (coverage >= 0.5) found.push({ part: p, score, coverage, exact: coverage === 1 });
+  }
+  found.sort((a, b) => b.score - a.score);
+  const top = found.slice(0, limit);
+  for (const m of top) {
+    const k = descKey(m.part);
+    m.sameAs = found.filter((o) => o !== m && descKey(o.part) === k).map((o) => partId(o.part));
+  }
+  return top;
+}
+
+// ---------- Pre-filling ----------
+
+// Serial numbers written in the ticket or its comments: "old SN: X", "removed S/N X", "new serial X", "installed SN X".
+function serialsInText(text) {
+  const t = String(text || "");
+  const SN = "([A-Z0-9][A-Z0-9-]{5,40})";
+  const grab = (words) => cleanSn((t.match(new RegExp(`\\b(?:${words})\\b[^\\n]{0,30}?\\b(?:s\\/?n|serial(?: number)?)\\b[\\s:#=-]*${SN}`, "i")) || [])[1]);
+  return { oldSn: grab("old|faulty|failed|bad|defective|removed|original"), newSn: grab("new|replacement|installed|good|spare") };
+}
+
+// A serial the AI suggests is only kept if it appears in the ticket or BMC data (no invented serials).
+const serialIn = (sn, text) => !!sn && String(text || "").toUpperCase().replace(/[^A-Z0-9]/g, "").includes(String(sn).toUpperCase().replace(/[^A-Z0-9]/g, ""));
+
+const RMA_PREFILL_SCHEMA = {
+  type: "object",
+  properties: {
+    part_description: { type: "string", description: "The failed part described like a catalog entry: vendor, model, capacity, form factor (e.g. 'NVIDIA H100 80GB SXM5', 'Samsung 64GB DDR5 4800 RDIMM'). Only what the ticket, BMC or catalog candidates support. Empty if unsure." },
+    mpn: { type: "string", description: "Manufacturer part number of the failed part. Empty if unsure." },
+    old_sn: { type: "string", description: "Serial number of the failed part that was removed, copied exactly from the ticket or BMC data. Empty if not written anywhere." },
+    new_sn: { type: "string", description: "Serial number of the replacement part that was installed, copied exactly from the ticket. Empty if not written anywhere." },
+    component: { type: "string", description: "Exactly one of the allowed Component Issue values, or empty." },
+    ship_replacement: { type: "string", enum: ["Yes", "No", ""], description: "Should a replacement unit be shipped to the DC? Empty if the ticket doesn't say." },
+    rma_type: { type: "string", description: "Exactly one of the allowed RMA Type values if the ticket says (e.g. the OEM replaces it onsite), else empty." },
+    description: { type: "string", description: "2 to 4 short factual lines for the RMA: what failed, the errors or symptoms, what was swapped. No serial numbers." }
+  },
+  required: ["part_description", "mpn", "old_sn", "new_sn", "component", "ship_replacement", "rma_type", "description"]
+};
+
+// Asks the AI to fill in the RMA from the ticket, the BMC and the catalog candidates. Returns {} on failure.
+async function rmaAiPrefill(settings, privacy, ctx) {
+  const user = [
+    `Ticket ${ctx.key}:\n${String(ctx.issueText || "").slice(0, 15000)}`,
+    ctx.bmc && `Failed components reported by the BMC: ${ctx.bmc}`,
+    ctx.parts && `Catalog candidates for the failed part:\n${ctx.parts}`,
+    `Allowed Component Issue values: ${ctx.components.join(" | ")}`,
+    ctx.rmaTypes.length && `Allowed RMA Type values: ${ctx.rmaTypes.join(" | ")}`
+  ].filter(Boolean).join("\n\n");
+  const { result } = await generateStructured(settings, {
+    system: "You prepare an RMA (return of a failed hardware part) for a datacenter technician. Fill in only what the ticket, its comments, the BMC data or the catalog candidates support. Never invent serial or part numbers: leave a field empty when it isn't written. The ticket's own part number is usually the whole server, not the failed part.",
+    user: privacy.redact(user), schema: RMA_PREFILL_SCHEMA, schemaName: "rma_prefill"
+  });
+  return privacy.restore(result || {});
+}
+
+// Jira comment lines for RMA tickets created from the panel.
+function rmaCommentLines(result) {
+  if (!result?.links?.length) return [];
+  return ["*RMA:*", `* ${result.added ? `Added to ${result.links[0]}` : result.links.join(" → ")}: ${result.part}, old S/N ${result.oldSn} → new S/N ${result.newSn}`];
+}

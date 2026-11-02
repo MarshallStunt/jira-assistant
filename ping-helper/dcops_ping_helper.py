@@ -44,7 +44,7 @@ import urllib.parse
 import urllib.request
 import zipfile
 
-VERSION = "1.6.1"
+VERSION = "1.6.2"
 MAX_TARGETS = 12
 IS_MAC = sys.platform == "darwin"
 IS_WIN = sys.platform == "win32"
@@ -454,7 +454,9 @@ def _problem(component, obj, detail=""):
     if not worst:
         return None
     name = obj.get("Name") or obj.get("MemberId") or obj.get("Id") or component
-    return {"component": component, "name": str(name)[:80], "health": worst, "state": state or "", "detail": str(detail)[:160]}
+    # Serial and part number of the failed part itself: the RMA form uses them as the old S/N and MPN.
+    return {"component": component, "name": str(name)[:80], "health": worst, "state": state or "", "detail": str(detail)[:160],
+            "serial": str(obj.get("SerialNumber") or "").strip()[:64], "part_number": str(obj.get("PartNumber") or "").strip()[:64]}
 
 
 def system_problems(rf, system):

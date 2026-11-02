@@ -144,6 +144,7 @@ function renderBrief(root, r, opts) {
     h("div", { class: "label" }, "🧰 Parts & tools"),
     r.parts_tools.length ? h("div", { class: "chips" }, r.parts_tools.map((t) => h("span", { class: "chip" }, t))) : null,
     h("div", { id: "catalogBox" })));
+  root.appendChild(h("section", { class: "card", id: "rmaBox" }));
 
   // 7. Reference: history, NetBox record, open questions
   root.appendChild(fold("history", `🕘 History${r.history.length ? ` (${r.history.length})` : ""}`, false,
