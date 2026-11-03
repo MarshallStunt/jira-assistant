@@ -1180,7 +1180,8 @@ async function renderEmpty(tab, settings) {
       ? "You're in Jira, but no ticket is open here. Click a ticket in your queue and its brief appears here."
       : `This panel works on the Jira ticket in the current tab. Switch to a ticket tab (or open one) and ${settings.autoRun ? "the brief appears here automatically" : "click Analyze"}.`),
     noKey && h("div", { class: "empty-setup" }, "⚙️ First, add your AI key: ",
-      h("button", { class: "link", onclick: () => chrome.runtime.openOptionsPage() }, "open Settings")),
+      h("button", { class: "link", onclick: () => chrome.runtime.openOptionsPage() }, "open Settings"),
+      h("div", { class: "muted" }, "No key yet? You can make a free Gemini key yourself in 2 minutes, no IT request: Settings → Getting started.")),
     tickets.length && h("div", { class: "empty-tabs" },
       h("div", { class: "label" }, "Tickets open in your tabs"),
       ...tickets.map(({ t, key }) => h("button", { class: "empty-tab", title: t.title, onclick: () => goTo(t) },

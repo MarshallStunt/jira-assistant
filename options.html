@@ -15,6 +15,18 @@
       <ol class="guide-steps">
         <li>
           <b>Get an AI API key.</b> The assistant needs a key for one AI service. We recommend <b>Anthropic Claude</b>: fast and accurate for tickets. OpenAI or Google Gemini also work.
+          <details class="gemini-now">
+            <summary>Start today: get a free Gemini key yourself (no IT request)</summary>
+            <p>You can make a Google Gemini key in 2 minutes with your Lambda Google account, and use it until IT gives you a Claude or OpenAI (ChatGPT) key.</p>
+            <ol>
+              <li>Open <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a> and sign in with your <b>Lambda Google account</b> (@lambdal.com or @lambda.ai). Accept the terms if it asks.</li>
+              <li>Click <b>Create API key</b>. If it asks for a project, choose <b>Create API key in new project</b>.</li>
+              <li>Click <b>Copy</b> next to the key. It starts with <code>AIza</code>.</li>
+              <li>Click <button id="useGemini" type="button" class="mini">Use Gemini here</button>, paste the key in <b>Gemini API key</b> below, click <b>Load models</b>, then <b>Save</b>. <b>Test AI</b> checks that it works.</li>
+            </ol>
+            <p class="hint">⚠️ On the free tier Google may use what you send to improve its products, and there's a daily limit. Turn on <b>Privacy mode</b> (Privacy tab) so names, IPs and serials are replaced before anything is sent. When IT gives you a Claude or OpenAI key, switch the provider and paste it: you can delete the Gemini key at aistudio.google.com/apikey.</p>
+            <p class="hint">If the page says AI Studio isn't available for your account, it's turned off for Lambda accounts: use the IT request below instead. Don't use a personal Google account for work tickets.</p>
+          </details>
           <details>
             <summary>I don't have a key: ask IT</summary>
             <p>Send this to IT (Slack or a ticket). You can change the provider if your team uses a different one.</p>
@@ -67,7 +79,7 @@
       <div class="field">
         <label for="geminiKey">Gemini API key</label>
         <input id="geminiKey" type="password" placeholder="AIza…" autocomplete="off">
-        <div class="hint">Get one at aistudio.google.com.</div>
+        <div class="hint">Make one yourself (free, no IT request) at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a> with your Lambda Google account: see <i>Getting started</i> above.</div>
       </div>
     </div>
 

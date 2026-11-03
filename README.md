@@ -10,7 +10,12 @@ A side panel for Datacenter Operations. Open a Jira ticket and get a one-glance 
 
 ## Quick start
 1. **Load the extension:** `chrome://extensions` → turn on **Developer mode** → **Load unpacked** → select this `lambda-rackside` folder. Pin it and click its icon to open the side panel. Settings opens on first install.
-2. **Get an AI key.** Settings → **Start** → *Getting started* has a ready-to-send request for IT. Claude (Anthropic) is recommended; OpenAI and Gemini also work.
+2. **Get an AI key.** Claude (Anthropic) is recommended; OpenAI (ChatGPT) and Gemini also work. Settings → **Start** → *Getting started* has a ready-to-send request for IT.
+   - **Start today without IT: a free Gemini key you make yourself** (2 minutes), until IT gives you a Claude or OpenAI key:
+     1. Open [aistudio.google.com/apikey](https://aistudio.google.com/apikey) and sign in with your **Lambda Google account** (@lambdal.com or @lambda.ai). Accept the terms if asked.
+     2. Click **Create API key** (if asked for a project: *Create API key in new project*), then **Copy**. The key starts with `AIza`.
+     3. In Settings click **Use Gemini here**, paste the key in *Gemini API key*, **Load models**, **Save**, then **Test AI**.
+   - ⚠️ On the free tier Google may use what you send to improve its products, and there's a daily limit: turn on **Privacy mode** (Settings → Privacy) while you use it. When your Claude or OpenAI key arrives, switch the provider, paste it, and delete the Gemini key at aistudio.google.com/apikey. If AI Studio says it isn't available for your account, it's turned off for Lambda accounts: use the IT request. Don't use a personal Google account for work tickets.
 3. **Install the helper** (ping, BMC). Settings → *Getting started* → **Copy** the setup command and run it: on a Mac in **Terminal**, on Windows in **PowerShell**. It asks before installing anything.
 4. **Paste the key**, click **Load models**, then **Save**. Open any Jira ticket.
 
@@ -137,7 +142,7 @@ Browsers can't ping or talk to BMCs, so a small Python helper does it through Ch
 |---|---|
 | Anthropic (Claude) | API key from console.anthropic.com |
 | OpenAI | API key from platform.openai.com |
-| Google Gemini | API key from aistudio.google.com |
+| Google Gemini | API key from aistudio.google.com/apikey: **you can make it yourself** with your Lambda Google account, no IT request (see *Quick start*) |
 | Local – LM Studio | LM Studio server running (default `http://localhost:1234/v1`) |
 | Local – Ollama | `ollama serve` (default `http://localhost:11434/v1`); on a 403 set `OLLAMA_ORIGINS=chrome-extension://*` |
 

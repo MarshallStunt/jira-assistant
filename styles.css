@@ -616,3 +616,5 @@ button:focus:not(:focus-visible) { outline: none; }
 .bom-note.warn { color: var(--warn); }
 .glance-row.pending .glance-v { color: var(--muted); font-style: italic; }
 .off-tab { display: none !important; } /* Settings: sections of the other tabs */
+.guide details.gemini-now > summary { font-weight: 600; color: var(--ok); }
+.guide details ol { margin: 6px 0; }

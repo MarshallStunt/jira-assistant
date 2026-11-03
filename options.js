@@ -301,6 +301,13 @@ function copyButton(btn, getText) {
 }
 copyButton($("copySetup"), () => $("setupCmd").value);
 copyButton($("copyItRequest"), () => $("itRequest").value);
+// "Use Gemini here": switch the provider to Gemini and put the cursor in its key box.
+$("useGemini").addEventListener("click", () => {
+  $("provider").value = "gemini";
+  $("provider").dispatchEvent(new Event("change"));
+  $("geminiKey").scrollIntoView({ block: "center", behavior: "smooth" });
+  $("geminiKey").focus();
+});
 
 $("copyInstall").addEventListener("click", async () => {
   await navigator.clipboard.writeText($("installCmd").value);

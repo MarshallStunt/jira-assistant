@@ -95,9 +95,9 @@ function providerLabel(id) {
 // Returns a human-readable problem if the provider isn't configured, else "".
 function missingConfig(s) {
   switch (s.provider) {
-    case "anthropic": return s.anthropicKey ? "" : "Add your Anthropic API key in Settings (⚙). No key yet? Settings → Getting started shows how to get one from IT.";
-    case "openai":    return s.openaiKey ? "" : "Add your OpenAI API key in Settings (⚙). No key yet? Settings → Getting started shows how to get one from IT.";
-    case "gemini":    return s.geminiKey ? "" : "Add your Gemini API key in Settings (⚙). No key yet? Settings → Getting started shows how to get one from IT.";
+    case "anthropic": return s.anthropicKey ? "" : "Add your Anthropic API key in Settings (⚙). No key yet? Ask IT, or start today with a free Gemini key you make yourself: Settings → Getting started.";
+    case "openai":    return s.openaiKey ? "" : "Add your OpenAI API key in Settings (⚙). No key yet? Ask IT, or start today with a free Gemini key you make yourself: Settings → Getting started.";
+    case "gemini":    return s.geminiKey ? "" : "Add your Gemini API key in Settings (⚙). No key yet? Make one yourself in 2 minutes: Settings → Getting started.";
     case "local":     return s.localBaseUrl ? "" : "Set your local server URL in Settings (⚙).";
     default:          return "Choose an AI provider in Settings (⚙).";
   }
