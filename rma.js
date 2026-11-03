@@ -173,7 +173,7 @@ function guessComponent(options, part, ticketText) {
   const pick = (re) => options.find((o) => re.test(o));
   const pn = String(part?.lambda || "").slice(0, 3);
   if (/switch ?board|plx|pcie switch/.test(text)) return pick(/PCIE Switch/i); // "switch board for … SXM5 GPU system" isn't a GPU
-  if (/^204/.test(pn) || /baseboard|hgx/.test(text)) return pick(/^GPU Baseboard$/i);
+  if (/^204/.test(pn) || /baseboard|hgx/.test(text)) return pick(/^GPU Baseboard$/i) || pick(/^GPU$/i); // H200/B200 GPUs are listed as baseboards/FRUs
   if (/^206/.test(pn) || /\b(gpu|h100|h200|b200|b300|a100)\b/.test(text)) {
     if (/fall(en)? off the bus|xid\s*79/i.test(ticketText)) return pick(/FALLEN/i) || pick(/^GPU$/i);
     if (/not detected|missing gpu/i.test(ticketText)) return pick(/NOT DETECTED/i) || pick(/^GPU$/i);

@@ -285,9 +285,13 @@ function glanceRows() {
       note: guess === "bmc-up" && !power ? "chassis most likely powered off" : !bmcHealth.length && ping.some((x) => x.role === "bmc") ? "BMC health not read" : "",
       tone: failed.length ? "bad" : down ? "warn" : "ok", jump: $("bmcBox") && !$("bmcBox").classList.contains("hidden") ? "bmcBox" : "server" });
   }
-  // The part: the BMC's failed part or the first replaceable catalog match, with its spare stock here
+  // The part: the BMC's failed part; else this server's own part (NetBox scan) that's missing or that the job is
+  // about ("GPU 3 fell off the bus" → its H100); else the first replaceable catalog match. With its spare stock here.
   const ps = partsView?.key === current.key ? partsView.state : null;
-  const part = ps?.matches?.find((p) => p.failed) || ps?.matches?.find((p) => !p.system);
+  const missingLine = (ps?.bom || []).find((b) => b.missing && b.part);
+  const own = missingLine ? { line: missingLine, part: missingLine.part } : bomFor(`${r.task_type} ${r.request_summary}`);
+  const part = ps?.matches?.find((p) => p.failed) || own?.part || ps?.matches?.find((p) => !p.system);
+  const ownNote = own?.part === part && own ? (own.line.missing ? `${own.line.missing} of ${own.line.count} missing in the last scan` : "in this server ✓") : "";
   if (part) {
     const id = partId(part), st = glanceStock.id === id ? glanceStock.data : null;
     const site2 = ticketSiteCode(r, lastResult.netbox);
@@ -299,7 +303,7 @@ function glanceRows() {
       note = here ? `${here} in stock at ${site2}` : all ? `none at ${site2 || "this site"}, ${all} elsewhere` : "no spares in NetBox";
     }
     rows.push({ icon: "🧰", key: part.failed ? "Failed part" : "Part", text: `${id} ${[part.vendor, part.name].filter(Boolean).join(" ")}`.slice(0, 90),
-      note, tone: st?.ok && !note.includes(" in stock at ") ? "warn" : "", jump: "parts" });
+      note: [ownNote, own?.part === part && own?.line.note, note].filter(Boolean).join(" · "), tone: own?.line.missing || (st?.ok && !note.includes(" in stock at ")) ? "warn" : "", jump: "parts" });
   }
   // Cautions (from the ticket): all of them, they're short
   if (r.cautions.length) rows.push({ icon: "⚠️", key: r.cautions.length > 1 ? `${r.cautions.length} cautions` : "Caution", text: r.cautions.join(" · "), tone: "warn", jump: "cautions" });
@@ -474,6 +478,27 @@ function ticketSiteCode(brief, nb) {
 
 let partsView = null;
 
+// What the server is, for "does this part fit": its scanned GPUs and its catalog entry. Empty if NetBox doesn't know.
+function serverFitText() {
+  const ps = partsView?.key === current.key ? partsView.state : null;
+  const gpus = (ps?.bom || []).filter((b) => b.kind === "GPU").map((b) => b.model);
+  const servers = (ps?.servers || []).map((p) => `${p.vendor} ${p.name} ${p.desc}`);
+  return [...gpus, ...servers].join(" ");
+}
+
+// The server's own part for a component ("GPU", "NIC", "SSD"…), from its scan: { line, part } or null.
+const BOM_KIND = [[/baseboard|hgx board/i, null], [/gpu|h100|h200|b200|b300|xid/i, "GPU"], [/\bnic\b|hca|connectx|bluefield|dpu|network card|infiniband/i, "NIC"],
+  [/ssd|nvme|m\.2|\bdisk\b|drive/i, "Disk"]];
+function bomFor(component) {
+  const ps = partsView?.key === current.key ? partsView.state : null;
+  const kind = BOM_KIND.find(([re]) => re.test(component || ""))?.[1];
+  if (!kind || !ps?.bom?.length) return null;
+  const lines = ps.bom.filter((b) => b.kind === kind && b.part);
+  const missing = lines.filter((b) => b.missing);
+  const line = missing.length === 1 ? missing[0] : lines.length === 1 ? lines[0] : null;
+  return line ? { line, part: line.part } : null;
+}
+
 async function setupParts(key, entry, nb) {
   const settings = await getSettings();
   const usedKey = `used:${key}`;
@@ -496,9 +521,11 @@ async function setupParts(key, entry, nb) {
       ...(nb?.ok ? nb.devices.map((d) => `${d.model} ${d.assetTag}`) : []), ...failedTexts])
       .map((p) => ({ ...p, failed: failed.has(partId(p)) }))
       .sort((a, b2) => b2.failed - a.failed);
-    // The server's own catalog entry, from NetBox's Lambda SKU (legacy_LPN).
-    const lpns = nb?.ok ? nb.devices.map((d) => d.legacyLpn).filter(Boolean) : [];
-    state.servers = state.catalog.parts.filter((p) => lpns.includes(p.legacy));
+    // The server's own catalog entry (NetBox device type part number or Lambda SKU) and its own parts (FastTrack scan).
+    state.servers = nb?.ok ? serverCatalogEntries(state.catalog, nb.devices) : [];
+    const dev = nb?.ok ? nb.devices.find((d) => d.inventory) : null;
+    state.bom = dev ? serverParts(state.catalog, dev) : [];
+    state.bomAt = dev?.inventory?.at || "";
   };
   const actions = {
     onUsed: (p, on) => {
@@ -633,6 +660,33 @@ async function setupRma(key, entry) {
     for (const k of ["lambda", "mpn"]) { delete state.form[k]; delete state.sources[k]; }
     usePart(p, source);
   };
+  // The server's own parts (NetBox: FastTrack's last scan) for the chosen component are listed first; when there's
+  // only one (or only one is missing from the scan), it's the part, unless a serial, a tick or you already decided.
+  const applyBom = () => {
+    const ps = partsView?.key === key ? partsView.state : null;
+    state.pinned = (state.pinned || []).filter((x) => !x.bom);
+    const kind = BOM_KIND.find(([re]) => re.test(state.form.component || state.form.partDesc || ""))?.[1];
+    // A part taken from the scan for another component (GPU → now NIC) no longer applies.
+    if (/^NetBox: in this server/.test(state.sources.lambda || "") && state.bomKind && state.bomKind !== kind) {
+      for (const k of ["lambda", "mpn", "partName"]) { delete state.form[k]; delete state.sources[k]; }
+    }
+    state.bomKind = kind;
+    if (!kind || !ps?.bom?.length) return;
+    for (const b of ps.bom.filter((x) => x.kind === kind && x.part)) {
+      state.pinned.push({ part: b.part, bom: true, tags: [b.missing ? `in this server: ${b.missing} of ${b.count} missing in last scan` : `in this server ✓ (${b.count}×)`] });
+    }
+    const own = bomFor(state.form.component || state.form.partDesc);
+    if (own && !strongPart() && partId(own.part) !== state.form.lambda) {
+      if (state.form.lambda) state.warnings.push(`This server's scan (NetBox) has ${own.line.model}, not ${state.form.lambda}. Switched to ${partId(own.part)}.`);
+      usePartFirmly(own.part, `NetBox: in this server (${own.line.count}× ${own.line.model})`);
+    }
+    if (own?.line.note) state.warnings.push(own.line.note);
+  };
+  // A NIC's serial in the server's scan names the card exactly.
+  const bomBySerial = (sn) => {
+    const ps = partsView?.key === key ? partsView.state : null, n = normPn(sn);
+    return n ? (ps?.bom || []).find((b) => b.part && b.serials?.some((x) => normPn(x) === n)) : null;
+  };
   // 1st source of truth for which part it is: the serials. NetBox knows the spare you installed (inventory "<P/N>_<serial>")
   // or the part you removed (installed module); that P/N is then taken from the catalog.
   let serialRun = 0;
@@ -640,6 +694,7 @@ async function setupRma(key, entry) {
     const settings = await getSettings();
     if (!settings.netboxEnabled || !catalog()) return;
     const run = ++serialRun, f = state.form, found = [];
+    const card = bomBySerial(f.oldSn);
     for (const [which, sn] of [["new", f.newSn], ["old", f.oldSn]]) {
       if (!sn) continue;
       const r = await netboxPartBySerial(settings, sn);
@@ -648,6 +703,10 @@ async function setupRma(key, entry) {
     if (run !== serialRun || state.step !== "form") return;
     state.warnings = state.warnings.filter((w) => !/^NetBox/.test(w));
     state.pinned = (state.pinned || []).filter((x) => !x.serial);
+    if (card) {
+      if (!state.touched.has("lambda") && partId(card.part) !== f.lambda) usePartFirmly(card.part, `NetBox: old S/N is this server's ${card.model}`);
+      state.pinned.unshift({ part: card.part, serial: true, tags: ["NetBox ✓ old S/N is in this server"] });
+    }
     state.serialNote = "";
     for (const x of found.filter((x) => !x.part)) state.warnings.push(`NetBox says the ${x.which} S/N ${x.sn} is ${x.id}, which isn't in the catalog. Check the part in the catalog.`);
     const known = found.filter((x) => x.part);
@@ -807,7 +866,7 @@ async function setupRma(key, entry) {
       state.catalog = catalog();
       state.form.kind = meta.defaultKind;
       // What the server is (for "doesn't fit this server"): its NetBox record, its catalog entry ("8-H100 … Chassis") and the ticket.
-      state.serverText = [...(lastResult?.key === key && lastResult.netbox?.ok ? lastResult.netbox.devices.map((d) => `${d.model} ${d.legacyLpn || ""}`) : []),
+      state.serverText = serverFitText() || [...(lastResult?.key === key && lastResult.netbox?.ok ? lastResult.netbox.devices.map((d) => `${d.model} ${d.legacyLpn || ""}`) : []),
         ...(partsView?.key === key ? (partsView.state.servers || []).map((p) => `${p.vendor} ${p.name} ${p.desc}`) : []),
         entry.brief.request_summary, String(entry.issueText || "").slice(0, 4000)].join(" ");
       // The server's hostname for the summary ("ord01-cl01-hgx-0084 - replace …"): a server name, not a serial.
@@ -832,6 +891,7 @@ async function setupRma(key, entry) {
       const probs = bmcProblems().filter((x) => x.serial && !onRma(x.serial));
       if (probs.length === 1) suggest("oldSn", cleanSn(probs[0].serial), `from BMC (${probs[0].name})`);
       suggest("component", guessComponent(state.meta.fields[RMA_FIELD_NAMES.component]?.options || [], { name: state.form.partDesc || swap.text || "" }, entry.issueText || ""), "guessed");
+      applyBom();
       crossFill();
       suggest("description", failure(), "from ticket & BMC");
       const inTicket = swap, from = swap.who ? `from ${swap.who}'s comment${swap.when ? ` (${swap.when.slice(0, 10)})` : ""}` : "from ticket";
@@ -849,7 +909,7 @@ async function setupRma(key, entry) {
       aiPrefill();
     },
     onSerial: () => { clearTimeout(state.serialTimer); state.serialTimer = setTimeout(verifySerials, 700); },
-    onComponent: () => { draw(); loadHistory(); }, // the list may now show this component's catalog parts
+    onComponent: () => { applyBom(); crossFill(); draw(); loadHistory(); }, // this server's parts for it, then the catalog's
     onPickPart: (p, src) => {
       for (const k of ["lambda", "mpn"]) { state.touched.delete(k); delete state.form[k]; delete state.sources[k]; }
       state.warnings = state.warnings.filter((w) => !/same description/.test(w));

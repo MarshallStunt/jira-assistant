@@ -132,6 +132,45 @@ function netboxMismatches(dev, brief, ticketSerials) {
 }
 
 // Full lookup for one ticket → { ok, devices: [...], searched: {...} } or { ok:false, error, auth }
+// ---------- The server's own parts ----------
+// FastTrack's last scan of the server, kept in NetBox (custom field fasttrack_inventory_export): its GPUs (with
+// present/missing), NICs (MPN + serial) and disks (MPN). This, not the ticket, says which parts the server has.
+// GPU names: lspci's "[H100 SXM5 80GB]", or the PCI device ID for GPUs lspci doesn't name yet ("Device [10de:2901]").
+const NVIDIA_GPU_IDS = {
+  "20b0": "A100 SXM4 40GB", "20b2": "A100 SXM4 80GB", "20b5": "A100 PCIe 80GB", "20f1": "A100 PCIe 40GB", "26b5": "L40", "26b9": "L40S",
+  "2324": "H800 SXM5", "2330": "H100 SXM5 80GB", "2331": "H100 PCIe 80GB", "2335": "H200 SXM 141GB", "233b": "H200 NVL 141GB",
+  "2901": "B200", "2941": "GB200", "3182": "B300", "31c2": "GB300"
+};
+function fasttrackGpuName(name) {
+  const id = (String(name).match(/\[10de:(\w{4})\]/i) || [])[1]?.toLowerCase();
+  const named = (String(name).match(/\[([^\]]*\b[A-Z]{1,2}\d{2,3}[A-Z]?\b[^\]]*)\]/) || [])[1];
+  return named || NVIDIA_GPU_IDS[id] || String(name).replace(/\s*\(rev.*$/, "").trim();
+}
+function fasttrackInventory(x) {
+  if (!x || typeof x !== "object") return null;
+  // Same model → one line with a count; "missing" = in the server's expected inventory but not seen in the last scan.
+  const group = (list, model) => {
+    const out = new Map();
+    for (const e of list || []) {
+      const m = model(e);
+      if (!m) continue;
+      const g = out.get(m) || { model: m, count: 0, missing: 0, serials: [] };
+      g.count++;
+      if (e.state && e.state !== "present") g.missing++;
+      if (e.serial_number) g.serials.push(String(e.serial_number).toUpperCase());
+      out.set(m, g);
+    }
+    return [...out.values()];
+  };
+  return {
+    at: x.provenance?.collected_at || "",
+    serial: x.serial_number || "",
+    gpus: group(x.gpus, (e) => fasttrackGpuName(e.name)),
+    nics: group(x.network_cards, (e) => e.name),
+    disks: group(x.disks, (e) => e.model)
+  };
+}
+
 async function netboxLookup(settings, brief, issueText) {
   const names = brief.server_names.filter((n) => !isIP(n) && !/^s\/?n\b/i.test(n) && /[a-z]/i.test(n) && n.length <= 64);
   const serials = [...new Set([...findSerialsInText(issueText), ...brief.server_names.filter((n) => /^s\/?n\b/i.test(n)).map((n) => n.replace(/^s\/?n\s*[:#]?\s*/i, "").toUpperCase())])];
@@ -142,11 +181,13 @@ async function netboxLookup(settings, brief, issueText) {
       return { ok: false, notFound: true, error: `Not found in NetBox: ${[...names, ...serials].join(", ")}` };
     }
     const detailed = await Promise.all(devices.map(async (d) => {
-      const [ifs, journal, mods] = await Promise.all([
+      const [ifs, journal, mods, type] = await Promise.all([
         nbGet(settings, `/api/dcim/interfaces/?device_id=${d.id}&limit=250`).catch(() => ({ results: [] })),
         nbGet(settings, `/api/extras/journal-entries/?assigned_object_type=dcim.device&assigned_object_id=${d.id}&ordering=-created&limit=25`).catch(() => ({ results: [] })),
         // Installed modules (mostly transceivers on switches; server parts aren't recorded in NetBox)
-        nbGet(settings, `/api/dcim/modules/?device_id=${d.id}&limit=250`).catch(() => ({ results: [] }))
+        nbGet(settings, `/api/dcim/modules/?device_id=${d.id}&limit=250`).catch(() => ({ results: [] })),
+        // The device type's part number is the server's catalog entry (SYS-821GE-TNHR-200-LL014 → 203-000015)
+        d.device_type?.id ? nbGet(settings, `/api/dcim/device-types/${d.device_type.id}/`).catch(() => null) : null
       ]);
       const interfaces = (ifs.results || []).map(summarizeInterface).filter((i) => i.peer || i.mgmt || i.mac);
       interfaces.sort((a, b) => Number(b.mgmt) - Number(a.mgmt) || a.name.localeCompare(b.name, undefined, { numeric: true }));
@@ -173,6 +214,8 @@ async function netboxLookup(settings, brief, issueText) {
         interfaces,
         podcrawler: podcrawlerActivity(journal.results),
         legacyLpn: d.custom_fields?.legacy_LPN || "", // the server's own Lambda SKU in the parts catalog (e.g. CSN0051)
+        typePartNumber: type?.part_number || "",
+        inventory: fasttrackInventory(d.custom_fields?.fasttrack_inventory_export),
         history: journalHistory(journal.results),
         modules: (mods.results || []).map((m) => ({
           bay: m.module_bay?.name || "", model: m.module_type?.model || "", partNumber: m.module_type?.part_number || "",

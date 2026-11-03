@@ -214,6 +214,73 @@ function partRow(p, state, actions) {
     p.system && h("div", { class: "part-flag" }, "🖥️ Whole server/chassis, not the part to replace. Search for the actual part below."));
 }
 
+// ---------- The server's own parts, matched to the catalog ----------
+// A scanned MPN ("Micron_7450_MTFDKBG3T8TFR", "AOC-STGS-i2T") → catalog parts with that MPN (exact, or the catalog's
+// longer ordering code "MTFDKBG3T8TFR-1BC15ABYYR", "AOC-STGS-I2T-O"). Best first: exact, has a Lambda P/N, not EOL.
+function catalogByMpn(catalog, mpn) {
+  const n = normPn(String(mpn || "").replace(/^(samsung|micron|intel|kioxia|solidigm|wdc|seagate)[\s_]+(\d{4}[\s_]+)?/i, ""));
+  if (!catalog || n.length < 6) return [];
+  const hits = [];
+  for (const p of catalog.parts) {
+    const keys = [p.mpn, p.vendorPn, p.legacy, p.lambda].map(normPn).filter((k) => k.length >= 6);
+    const exact = keys.includes(n);
+    const near = !exact && keys.some((k) => (k.startsWith(n) && k.length - n.length <= 12) || (k.includes(n) && n.length >= 10));
+    if (exact || near) hits.push({ p, rank: (exact ? 0 : 2) + (p.lambda ? 0 : 1) + (p.inactive ? 3 : 0) });
+  }
+  return hits.sort((a, b) => a.rank - b.rank).map((x) => x.p);
+}
+
+// GPU model → catalog GPU (206-…). Newer GPUs are listed as FRUs (204-…: "B200 Single GPU FRU Unit", "Wickie B300 FRU -
+// GPU only") made for one chassis maker, so the server's maker counts; failing that, the HGX baseboard, flagged.
+const MAKER_ALIASES = { smc: "supermicro", "super micro": "supermicro" };
+function catalogGpu(catalog, model, maker = "") {
+  const want = descTokens(model);
+  const fam = [...want].find((t) => /^(gb|[abhl])\d{2,3}s?$/.test(t));
+  if (!catalog || !fam) return { part: null, baseboard: null };
+  const has = (p, t) => descTokens(`${p.vendor} ${p.name} ${p.desc}`).has(t);
+  const gpus = catalog.parts.filter((p) => /^206-/.test(p.lambda) && has(p, fam) && !specConflict(want, descTokens(`${p.name} ${p.desc}`)));
+  if (gpus.length) return { part: gpus.find((p) => !p.inactive) || gpus[0], baseboard: null };
+  const m = String(maker).toLowerCase().split(/\s+/)[0], mk = MAKER_ALIASES[m] || m;
+  const sameMaker = (p) => !!mk && String(p.vendor).toLowerCase().replace(/\s+/g, "").includes(mk);
+  const boards = catalog.parts.filter((p) => /^204-/.test(p.lambda) && has(p, fam) && !p.inactive)
+    .map((p) => ({ p, single: /single gpu|gpu only/i.test(`${p.name} ${p.desc}`), score: (sameMaker(p) ? 4 : 0) + (/single gpu|gpu only/i.test(`${p.name} ${p.desc}`) ? 2 : 0) }))
+    .filter((x) => !mk || sameMaker(x.p)) // FRUs and baseboards are made for one maker's chassis (no Wistron sled in a Dell)
+    .sort((a, b) => b.score - a.score);
+  const best = boards[0];
+  return best?.single ? { part: best.p, baseboard: null } : { part: null, baseboard: best?.p || null };
+}
+
+// [{ kind: "GPU" | "NIC" | "Disk", model, count, missing, serials, part, alts, note }] for one NetBox device.
+function serverParts(catalog, dev) {
+  const inv = dev?.inventory;
+  if (!catalog || !inv) return [];
+  const out = [];
+  for (const g of inv.gpus) {
+    const { part, baseboard } = catalogGpu(catalog, g.model, dev.model);
+    out.push({ kind: "GPU", ...g, part: part || baseboard, alts: [],
+      note: !part && baseboard ? `No single ${g.model} GPU in the catalog, only the GPU baseboard` : part ? "" : `No ${g.model} GPU for this server in the catalog` });
+  }
+  for (const [kind, list] of [["NIC", inv.nics], ["Disk", inv.disks]]) {
+    for (const x of list) {
+      const hits = catalogByMpn(catalog, x.model);
+      if (hits.length) { out.push({ kind, ...x, part: hits[0], alts: hits.slice(1, 3), note: "" }); continue; }
+      // Newer scans name some cards, not their MPN ("ConnectX-8 800GE 2P NIC"): the catalog's closest descriptions, to check.
+      const like = catalogByDescription(catalog, x.model, 4).filter((m) => m.coverage >= 0.75 && !isWholeSystem(m.part)).map((m) => m.part);
+      out.push({ kind, ...x, part: like.length === 1 ? like[0] : null, alts: like.length === 1 ? [] : like.slice(0, 3), guess: like.length > 0,
+        note: like.length ? `No MPN in the scan: matched by description${like.length > 1 ? `, ${like.length} catalog parts fit` : ""}. Check the label.` : "Not in the catalog" });
+    }
+  }
+  return out;
+}
+
+// The server's own catalog entry: NetBox device type part number (SYS-821GE-TNHR-200-LL014) or Lambda SKU (legacy_LPN).
+function serverCatalogEntries(catalog, devices) {
+  if (!catalog) return [];
+  const want = new Set(devices.flatMap((d) => [d.typePartNumber, d.legacyLpn]).map(normPn).filter((k) => k.length >= 6));
+  return catalog.parts.filter((p) => !/\(capex\)/i.test(p.lambda) && [p.mpn, p.legacy].map(normPn).some((k) => want.has(k)))
+    .filter((p, i, all) => all.findIndex((q) => q.lambda === p.lambda) === i).slice(0, 2);
+}
+
 // state: { loading, error, catalog, matches, used: Map(id → part) }
 function renderCatalog(box, state, actions) {
   if (!box) return;
@@ -231,6 +298,23 @@ function renderCatalog(box, state, actions) {
       s.lambda && copyChip(s.lambda), s.legacy && h("span", { class: "part-other" }, h("span", { class: "part-k" }, "SKU"), copyChip(s.legacy)),
       h("span", { class: "part-server-name" }, [s.vendor, s.name, s.desc && s.desc !== s.name && s.desc].filter(Boolean).join(" · ")),
       h("button", { class: "link part-open", onclick: () => actions.openRow(s.row) }, "Open in catalog ", icon("external", 10))));
+  }
+  // The server's own parts (NetBox: FastTrack's last scan), each with its catalog P/N: the source of truth for what's inside.
+  if (state.bom?.length) {
+    box.appendChild(h("div", { class: "part-sub" }, "🔩 In this server ", h("span", { class: "muted" }, `NetBox · FastTrack scan${state.bomAt ? ` ${timeAgo(state.bomAt)}` : ""}`)));
+    box.appendChild(h("div", { class: "bom" }, state.bom.map((b) => {
+      const stockBox = h("div", { class: "part-stock" });
+      return h("div", { class: `bom-row${b.missing ? " missing" : ""}` },
+        h("div", { class: "bom-line" },
+          h("span", { class: "bom-kind" }, b.kind), h("span", { class: "bom-model" }, `${b.count}× ${b.model}`),
+          b.missing ? h("span", { class: "rma-tag bad" }, `${b.missing} missing in last scan`) : null),
+        b.part ? h("div", { class: "bom-part" }, copyChip(partId(b.part)), h("span", { class: "muted" }, ` ${[b.part.vendor, b.part.name].filter(Boolean).join(" ")}`.slice(0, 80)),
+          actions.onStock && h("button", { class: "link", onclick: () => actions.onStock(b.part, stockBox) }, "📦 Stock"),
+          h("button", { class: "link part-open", onclick: () => actions.openRow(b.part.row) }, "Catalog ", icon("external", 10))) : null,
+        b.alts?.length ? h("div", { class: "muted bom-alt" }, `${b.part ? "Also listed" : "Could be"}: `, b.alts.map((p) => partId(p)).join(", ")) : null,
+        b.note && h("div", { class: `bom-note${b.part ? "" : " warn"}` }, b.note),
+        stockBox);
+    })));
   }
   // Numbers found in the ticket are shown for reference: the ticket's part number is usually the chassis.
   box.appendChild(h("div", { class: "part-hint" }, "The part number on a ticket is usually the server/chassis, not the part to swap. Use ",

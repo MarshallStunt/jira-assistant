@@ -48,7 +48,12 @@ The brief streams in as the AI writes it. Results, checklist ticks and chats are
 
 ### Parts: catalog, stock and AI
 - **The part number on a ticket is usually the server/chassis, not the part to swap.** Numbers found in the ticket are listed as *mentioned in the ticket*, whole servers are marked, and the AI never treats them as the replacement part.
-- **🖥️ This server**: the server's own catalog entry from NetBox's Lambda SKU (`legacy_LPN`), e.g. "Hyperplane 8-H100 Intel 8U Chassis", so you know the GPU generation.
+- **🖥️ This server**: the server's own catalog entry, from its NetBox device type part number (e.g. `SYS-821GE-TNHR-200-LL014` → 203-000015 "Cloud · H200") or Lambda SKU (`legacy_LPN`).
+- **🔩 In this server** (the source of truth for what's inside): the parts in FastTrack's last scan of the server, kept in NetBox (`fasttrack_inventory_export`), each matched to the catalog:
+  - **GPUs** by model (lspci name, or the PCI ID for GPUs it doesn't name yet: B200, B300, GB300…) → the 206- GPU, or the 204- GPU FRU / baseboard **from the server's own maker** (a Wistron sled is never offered for a Dell). When the catalog has no single GPU (H200 today), it says so and shows the baseboard.
+  - **NICs and disks** by their exact MPN (e.g. MCX75310AAS-NEAT → 211-000011, Micron_7450_MTFDKBG3T8TFR → 208-000500). Scans that only name a card ("BlueField-3 DPU") are matched by description and marked *check the label*.
+  - **Missing in the last scan** (e.g. "1 of 8 GPUs") is flagged in red: usually the failed part.
+  - This list drives the rest: **At a glance** shows the server's own part for the job, the **RMA** form takes it for the chosen component (and a NIC's serial names the exact card), and "fits this server" uses the scanned GPUs, so an H100 part is tagged *doesn't fit* in an H200 server even when the ticket says H100.
 - Every part leads with its **Lambda P/N** (what parts are tracked by), then legacy SKU, MPN and description, all click-to-copy. *No Lambda P/N* is flagged; if the same MPN is listed with one, the card points to that row. Parts the BMC reports as failed come first.
 - **🔎 Find a part** searches the catalog. **📒 Open catalog** / **Open in catalog** open the sheet (on the part's row) to confirm before ordering.
 - **📦 Check stock** looks the part up in NetBox storage (stock counts and stored serialized spares), **this site first**, e.g. "155 at ORD01 — ORD01-Storage-Cabinet 114, ORD01DH1-Storage-Ra3-Shelf2 41". If it isn't stocked under its own numbers, it finds the same kind of part by MPN or description (e.g. Samsung 64 GB DDR5 RDIMM → 207-000002 Hynix 64 GB DDR5 RDIMM).
