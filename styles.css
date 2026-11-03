@@ -615,3 +615,4 @@ button:focus:not(:focus-visible) { outline: none; }
 .bom-note { color: var(--muted); }
 .bom-note.warn { color: var(--warn); }
 .glance-row.pending .glance-v { color: var(--muted); font-style: italic; }
+.off-tab { display: none !important; } /* Settings: sections of the other tabs */

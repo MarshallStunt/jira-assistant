@@ -2,7 +2,7 @@
 
 *The DC Ops ticket assistant.*
 
-A side panel for Datacenter Operations. Open a Jira ticket and get a one-glance work brief: is it safe to power down, what to do, where the server is, its NetBox record and BMC health, the right replacement part with its Lambda P/N and where it's in stock, and an AI you can ask follow-up questions. Works on Mac and Windows, with Claude, OpenAI, Gemini or a local model.
+A side panel for Datacenter Operations. Open a Jira ticket and get a one-glance work brief: is it safe to power down, what to do, where the server is, its NetBox record and BMC health, the right replacement part (from the server's own NetBox inventory, matched to the catalog) with its Lambda P/N and where it's in stock, and an AI you can ask follow-up questions. Works on Mac and Windows, with Claude, OpenAI, Gemini or a local model.
 
 **Help, bugs or feature ideas:** message the developer, [Hadi Khodja on Slack](https://lambda.slack.com/team/U0AAMLCUCUA). The link is also at the bottom of the panel and of Settings.
 
@@ -156,21 +156,21 @@ Browsers can't ping or talk to BMCs, so a small Python helper does it through Ch
 |---|---|
 | `manifest.json` | Extension manifest (permissions, version) |
 | `background.js` | Service worker: opens the side panel, request headers, clears removed settings, new-version check (badge, notification) |
-| `sidepanel.html` / `sidepanel.js` | The panel: reads the ticket, runs the AI and all lookups; update banner, start screen |
-| `render.js` | Draws the brief, ping and NetBox cards |
+| `sidepanel.html` / `sidepanel.js` | The panel: reads the ticket, runs the AI and all lookups; At a glance, jump bar, update banner, start screen |
+| `render.js` | Draws the brief (folded sections, At a glance), ping and NetBox cards |
 | `analysis.js` | Brief schema, AI instructions, Jira comment |
-| `common.js` | Settings, developer contact, folder commands (setup, update), update check, AI providers (Claude, OpenAI, Gemini, local), streaming |
+| `common.js` | Settings, appearance (theme, layout), developer contact, folder commands (setup, update), update check, AI providers (Claude, OpenAI, Gemini, local), streaming |
 | `chat.js` | Ask-the-AI box, part search planning |
-| `catalog.js` | Parts catalog: load, match, search, catalog rows for the AI, Parts card |
-| `netbox.js` | NetBox lookup, journal, modules, spare stock |
+| `catalog.js` | Parts catalog: load, match, search, the server's own parts matched by MPN / GPU model, catalog rows for the AI, Parts card |
+| `netbox.js` | NetBox lookup, journal, modules, FastTrack scan (the server's parts), spare stock |
 | `bmc.js` | BMC card: health, remote console, power panel |
 | `rma.js` | RMA card: part and serials prompt, catalog matching, review, creates and links the RMA ticket (or comments on the existing one) |
 | `ping.js` | Ping targets and the native-messaging call to the helper |
 | `slack.js` | Opens a Slack DM in your Slack tab |
 | `privacy.js` | Privacy mode placeholders |
 | `icons.js`, `icons/` | Line icons and the λ logo |
-| `options.html` / `options.js` | Settings page (tabs, Test AI, backup & restore, updates) |
-| `styles.css` | Styles for both pages (light and dark) |
+| `options.html` / `options.js` | Settings page (tabs, Test AI, backup & restore, updates, appearance) |
+| `styles.css` | Styles for both pages (light and dark, accent colours, section colours, density) |
 | `ping-helper/` | Python helper (ping; BMC health, console link and power over Redfish; self-update) and its Mac/Windows installers |
 | `setup.sh` / `setup.ps1` | One-step setup for Mac / Windows |
 

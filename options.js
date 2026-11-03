@@ -335,7 +335,8 @@ function setupTabs() {
   let saved = "start";
   try { saved = localStorage.getItem("settingsTab") || "start"; } catch {}
   const show = (tab) => {
-    for (const el of document.querySelectorAll("[data-group]")) el.classList.toggle("hidden", el.dataset.group !== tab);
+    // Its own class, not "hidden": the AI provider boxes toggle "hidden" themselves and would show on every tab.
+    for (const el of document.querySelectorAll("[data-group]")) el.classList.toggle("off-tab", el.dataset.group !== tab);
     // The first heading in a tab gets no divider line above it.
     document.querySelectorAll("h2[data-tab]").forEach((h2) => h2.classList.remove("first"));
     document.querySelector(`[data-group="${tab}"]:is(h2)`)?.classList.add("first");
