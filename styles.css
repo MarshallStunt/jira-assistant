@@ -487,7 +487,7 @@ button:focus:not(:focus-visible) { outline: none; }
 #history { --sec: var(--sec-history); } #netboxBox { --sec: var(--sec-netbox); } #confirm { --sec: var(--sec-confirm); }
 .card.caution { --sec: var(--warn); }
 #result .card[style*="--sec"], #result .card:is(#request, #server, #bmcBox, #steps, #parts, #rmaBox, #history, #netboxBox, #confirm, .caution) {
-  border-left: 4px solid var(--sec); padding-left: calc(var(--pad-x) - 1px); transition: box-shadow .2s;
+  border-left: 4px solid var(--sec); padding-left: calc(var(--pad-x) - 1px);
 }
 #result .card:is(#request, #server, #bmcBox, #steps, #parts, #rmaBox, #history, #netboxBox, #confirm) .label {
   color: var(--sec); font-size: 11.5px; letter-spacing: .05em;
@@ -614,3 +614,4 @@ button:focus:not(:focus-visible) { outline: none; }
 .bom-alt, .bom-note { font-size: 11.5px; margin-top: 2px; }
 .bom-note { color: var(--muted); }
 .bom-note.warn { color: var(--warn); }
+.glance-row.pending .glance-v { color: var(--muted); font-style: italic; }

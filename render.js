@@ -56,6 +56,10 @@ function personChip(name, onSlack) {
 //         openSlack(name), partial, powerPending }
 // Order: what kind of job and is it safe → what to do → where → how → reference.
 function renderBrief(root, r, opts) {
+  // The "At a glance" card is kept across redraws of the same ticket (they happen many times while the AI writes),
+  // so it doesn't blink empty and refill each time.
+  const keptGlance = document.getElementById("glance");
+  const currentId = root.querySelector(".card.current")?.id; // keep the "you are here" outline on the redrawn card
   root.innerHTML = "";
   const { meta = {}, checks = new Set(), onCheck = () => {} } = opts;
   const slack = opts.openSlack;
@@ -87,7 +91,9 @@ function renderBrief(root, r, opts) {
   }
 
   // At a glance: the job, where, live state, the part and the next step (filled in by sidepanel.js → updateGlance).
-  root.appendChild(h("section", { class: "card glance", id: "glance" }));
+  const glance = keptGlance?.dataset.key === opts.key ? keptGlance : h("section", { class: "card glance", id: "glance" });
+  glance.dataset.key = opts.key;
+  root.appendChild(glance);
 
   // 3. What to do
   if (r.request_summary || r.current_status) {
@@ -168,6 +174,7 @@ function renderBrief(root, r, opts) {
       r.missing_info.length ? h("ul", {}, r.missing_info.map((m) => h("li", {}, m))) : null,
       r.probable_cause && h("p", { class: "cause" }, h("b", {}, "Probable cause: "), r.probable_cause)));
   }
+  if (currentId) document.getElementById(currentId)?.classList.add("current");
 }
 
 // Reachability rows inside the Server card.
@@ -358,13 +365,30 @@ function renderNetbox(box, state, actions) {
 }
 
 // The "At a glance" card. rows: [{ icon, key, text, note, tone: "ok" | "warn" | "bad" | "", jump: section id, action: button }]
+// Rows are updated in place: a row whose text didn't change is left alone, so nothing blinks while data arrives.
 function renderGlance(box, rows, onJump) {
   if (!box) return;
-  box.replaceChildren(h("div", { class: "label" }, "⚡ At a glance"),
-    h("div", { class: "glance-rows" }, rows.map((r) => h("div", { class: `glance-row ${r.tone || ""}` },
+  let list = box.querySelector(".glance-rows");
+  if (!list) box.replaceChildren(h("div", { class: "label" }, "⚡ At a glance"), (list = h("div", { class: "glance-rows" })));
+  const old = new Map([...list.children].map((el) => [el.dataset.k, el]));
+  const els = rows.map((r) => {
+    const sig = JSON.stringify([r.key, r.text, r.note, r.tone, r.pending, !!r.action]);
+    const el = old.get(r.icon);
+    if (el?.dataset.sig === sig) return el;
+    const row = h("div", { class: `glance-row ${r.tone || ""}${r.pending ? " pending" : ""}`, "data-k": r.icon, "data-sig": sig },
       h("span", { class: "glance-icon" }, r.icon),
       h("button", { class: "glance-main", type: "button", title: r.jump ? "Show the details" : null, onclick: () => r.jump && onJump(r.jump) },
         h("span", { class: "glance-k" }, r.key), h("span", { class: "glance-v" }, r.text),
         r.note && h("span", { class: "glance-note" }, r.note)),
-      r.action || null))));
+      r.action || null);
+    return row;
+  });
+  // Swap only what changed: unchanged rows stay in the page untouched.
+  els.forEach((el, i) => {
+    const at = list.children[i];
+    if (at === el) return;
+    if (at && !els.includes(at) && !el.isConnected) at.replaceWith(el);
+    else list.insertBefore(el, at || null);
+  });
+  while (list.children.length > els.length) list.lastElementChild.remove();
 }

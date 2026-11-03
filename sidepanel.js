@@ -247,6 +247,7 @@ addEventListener("scroll", () => { cancelAnimationFrame(spyFrame); spyFrame = re
 // One card at the top with what matters, from live systems first (NetBox, ping, BMC, catalog & stock) and the
 // ticket only for the job itself. Each row opens its section. Rebuilt when anything on the page changes.
 let glanceSig = "", glanceStock = { id: "", data: null };
+let glanceBrief = null; // { key, brief }: the brief being shown, also while the AI is still writing it
 
 function jumpTo(id) {
   const target = $(id);
@@ -255,9 +256,9 @@ function jumpTo(id) {
   target.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
-function glanceRows() {
-  const r = lastResult.brief, rows = [];
-  const dev = lastResult.netbox?.ok ? lastResult.netbox.devices[0] : null;
+function glanceRows(r) {
+  const rows = [], live = lastResult?.key === current.key ? lastResult : {}; // lookups (NetBox, ping, BMC) once they're in
+  const dev = live.netbox?.ok ? live.netbox.devices[0] : null;
   // The job (from the ticket)
   const job = String(r.request_summary || "").split(/(?<=[.!?])\s/)[0];
   if (r.task_type || job) rows.push({ icon: "🎯", key: r.task_type || "Job", text: job, jump: "request" });
@@ -268,11 +269,13 @@ function glanceRows() {
     : [r.server_names[0], site, loc.rack && `rack ${loc.rack}`, loc.unit && `RU ${loc.unit}`];
   const mism = dev?.mismatches?.length || 0;
   if (where.some(Boolean)) rows.push({ icon: "📍", key: "Where", text: where.filter(Boolean).join(" · "),
-    note: dev ? (mism ? `⚠️ ${mism} mismatch${mism > 1 ? "es" : ""} with the ticket` : "NetBox ✓") : "from the ticket", tone: mism ? "warn" : "", jump: "server" });
+    note: dev ? (mism ? `⚠️ ${mism} mismatch${mism > 1 ? "es" : ""} with the ticket` : "NetBox ✓") : live.netbox ? "from the ticket" : "from the ticket · checking NetBox…", tone: mism ? "warn" : "", jump: "server" });
   // Live: ping, plus the BMC's power state and failed parts once health was read
-  const ping = lastResult.ping?.results || [];
-  const bmcHealth = Object.values(lastResult.bmc || {}).filter((x) => x?.ok);
-  if (ping.length || bmcHealth.length) {
+  const ping = live.ping?.results || [];
+  const bmcHealth = Object.values(live.bmc || {}).filter((x) => x?.ok);
+  if (!ping.length && !bmcHealth.length && r.server_names.length) {
+    rows.push({ icon: "📡", key: "Live", text: "checking…", pending: true }); // keeps its place until ping answers
+  } else if (ping.length || bmcHealth.length) {
     const role = (x) => (x.role === "bmc" ? "BMC" : "Host");
     const bits = ping.filter((x) => x.ok).map((x) => `${role(x)} ${x.reachable ? "up" : "down"}`);
     const guess = serverPowerGuess(ping);
@@ -292,9 +295,11 @@ function glanceRows() {
   const own = missingLine ? { line: missingLine, part: missingLine.part } : bomFor(`${r.task_type} ${r.request_summary}`);
   const part = ps?.matches?.find((p) => p.failed) || own?.part || ps?.matches?.find((p) => !p.system);
   const ownNote = own?.part === part && own ? (own.line.missing ? `${own.line.missing} of ${own.line.count} missing in the last scan` : "in this server ✓") : "";
+  if (!part) rows.push(!ps || ps.loading ? { icon: "🧰", key: "Part", text: "looking it up…", pending: true }
+    : { icon: "🧰", key: "Part", text: "not identified yet", note: "open Parts to search the catalog", jump: "parts" });
   if (part) {
     const id = partId(part), st = glanceStock.id === id ? glanceStock.data : null;
-    const site2 = ticketSiteCode(r, lastResult.netbox);
+    const site2 = ticketSiteCode(r, live.netbox);
     let note = "";
     if (st === "loading") note = "checking stock…";
     else if (st?.ok) {
@@ -308,7 +313,7 @@ function glanceRows() {
   // Cautions (from the ticket): all of them, they're short
   if (r.cautions.length) rows.push({ icon: "⚠️", key: r.cautions.length > 1 ? `${r.cautions.length} cautions` : "Caution", text: r.cautions.join(" · "), tone: "warn", jump: "cautions" });
   // Next step: the first one not ticked, with a button to tick it
-  const checks = lastResult.checks || new Set();
+  const checks = live.checks || new Set();
   const next = r.next_steps.findIndex((_, i) => !checks.has(i));
   if (r.next_steps.length) {
     const done = r.next_steps.filter((_, i) => checks.has(i)).length;
@@ -320,18 +325,18 @@ function glanceRows() {
 }
 
 async function updateGlance() {
-  const box = $("glance");
-  if (!box || !lastResult?.brief || lastResult.key !== current.key) return;
-  const { rows, part } = glanceRows();
+  const box = $("glance"), r = glanceBrief?.key === current.key ? glanceBrief.brief : null;
+  if (!box || !r) return;
+  const { rows, part } = glanceRows(r);
   const sig = JSON.stringify(rows.map(({ action, ...x }) => x));
-  if (sig !== glanceSig || !box.childElementCount) { glanceSig = sig; renderGlance(box, rows, jumpTo); }
+  if (sig !== glanceSig || !box.querySelector(".glance-rows")) { glanceSig = sig; renderGlance(box, rows, jumpTo); }
   // Spare stock for the part, looked up once (automatic: no click needed)
   if (part && glanceStock.id !== partId(part)) {
     const settings = await getSettings();
     if (!settings.netboxEnabled) return;
     const key = current.key, id = partId(part);
     glanceStock = { id, data: "loading" };
-    const data = await netboxStockForPart(settings, part, ticketSiteCode(lastResult.brief, lastResult.netbox)).catch((e) => ({ ok: false, error: e.message }));
+    const data = await netboxStockForPart(settings, part, ticketSiteCode(r, lastResult?.netbox)).catch((e) => ({ ok: false, error: e.message }));
     if (glanceStock.id === id && current.key === key) { glanceStock.data = data; updateGlance(); }
   }
 }
@@ -402,6 +407,7 @@ async function show(key, entry) {
   const saved = (await chrome.storage.session.get(checksKey))[checksKey] || [];
   const checks = new Set(saved);
   lastResult.checks = checks;
+  glanceBrief = { key, brief: entry.brief };
   renderBrief($("result"), entry.brief, {
     key,
     meta: entry.meta,
@@ -409,6 +415,7 @@ async function show(key, entry) {
     onCheck: () => chrome.storage.session.set({ [checksKey]: [...checks] }),
     openSlack
   });
+  updateGlance(); // now, not on the next refresh: the card never shows empty
   startLookups(key, entry);
   $("meta").textContent = `${entry.model} · ${new Date(entry.analyzedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}${entry.tookS ? ` · ${entry.tookS} s` : ""}${entry.hidden != null ? ` · 🔒 ${entry.hidden} hidden from AI` : ""} · v${chrome.runtime.getManifest().version}`;
   $("result").classList.remove("hidden");
@@ -1231,15 +1238,31 @@ async function analyze(force = false) {
     const tick = setInterval(() => current.key === key && setStep("ai", "run", `${Math.round((Date.now() - started) / 1000)} s`), 1000);
     let brief, model;
     // Show the brief as it is written. The power verdict stays "checking" until the AI has moved past it.
+    // Redraw at most every 250 ms, and only when the brief actually changed: no flicker while it streams.
+    let drawn = "", pending = null, timer = null, streamDone = false;
+    const drawPartial = () => {
+      timer = null;
+      if (streamDone || current.key !== key || !pending) return;
+      const [partial, raw] = pending, powerPending = !("request_summary" in raw);
+      const sig = JSON.stringify(partial) + powerPending;
+      if (sig === drawn) return;
+      drawn = sig;
+      glanceBrief = { key, brief: partial };
+      renderBrief($("result"), partial, { key, meta: issueMeta(issue.data), partial: true, powerPending, openSlack });
+      updateGlance();
+      $("result").classList.remove("hidden");
+    };
     const onPartial = (partial, raw) => {
       if (current.key !== key) return;
-      renderBrief($("result"), partial, { key, meta: issueMeta(issue.data), partial: true, powerPending: !("request_summary" in raw), openSlack });
-      $("result").classList.remove("hidden");
+      pending = [partial, raw];
+      if (!timer) timer = setTimeout(drawPartial, drawn ? 250 : 0);
     };
     try {
       ({ brief, model } = await analyzeIssue(settings, key, text, onPartial, privacy));
     } finally {
       clearInterval(tick);
+      streamDone = true;
+      clearTimeout(timer);
     }
     setStep("ai", "ok", `${Math.round((Date.now() - started) / 1000)} s`);
     // Exact field mappings (if configured) win over the model's extraction.
