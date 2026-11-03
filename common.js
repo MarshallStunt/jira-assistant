@@ -395,7 +395,7 @@ const EFFORT = { fast: "low", balanced: "medium", thorough: "high" };
 const effortOf = (s) => EFFORT[s.speed] || "low";
 
 function geminiThinking(model, s) {
-  if (/gemini-2\.5/i.test(model)) return { thinkingBudget: { fast: /pro/i.test(model) ? 128 : 0, balanced: 1024, thorough: -1 }[s.speed] ?? 0 };
+  if (/gemini-2\.5|flash-lite/i.test(model)) return { thinkingBudget: { fast: /pro/i.test(model) ? 128 : 0, balanced: 1024, thorough: -1 }[s.speed] ?? 0 };
   return { thinkingLevel: effortOf(s) === "high" ? "high" : "low" };
 }
 
@@ -442,6 +442,9 @@ async function listModels(s, provider = s.provider) {
   return [];
 }
 
+// Gemini's default: Google's "latest Flash-Lite" alias (fast, cheap, and the free tier's highest limits).
+const GEMINI_DEFAULT_MODEL = "gemini-flash-lite-latest";
+
 // Use the chosen model, or pick a sensible default and remember it.
 async function resolveModel(s) {
   const chosen = s.models[s.provider];
@@ -452,8 +455,9 @@ async function resolveModel(s) {
       ? "No models found on your local server. Load/pull a model first."
       : "No models available for this API key.");
   }
-  // Fast and accurate enough for a brief: newest Sonnet, a GPT "mini", Gemini Flash.
-  const prefer = { anthropic: [/sonnet/i], openai: [/^gpt-\d[\w.]*-mini$/i, /^gpt/i], gemini: [/flash(?!.*lite)/i], local: [/./] }[s.provider];
+  // Fast and accurate enough for a brief: newest Sonnet, a GPT "mini", Gemini Flash-Lite (latest).
+  const prefer = { anthropic: [/sonnet/i], openai: [/^gpt-\d[\w.]*-mini$/i, /^gpt/i],
+    gemini: [new RegExp(`^${GEMINI_DEFAULT_MODEL}$`, "i"), /flash-lite(?!.*preview)/i, /flash/i], local: [/./] }[s.provider];
   const pick = prefer.map((re) => models.find((m) => re.test(m.id))).find(Boolean) || models[0];
   const stored = (await chrome.storage.local.get("models")).models || {};
   await chrome.storage.local.set({ models: { ...stored, [s.provider]: pick.id } });

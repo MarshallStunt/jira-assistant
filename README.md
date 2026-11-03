@@ -14,7 +14,7 @@ A side panel for Datacenter Operations. Open a Jira ticket and get a one-glance 
    - **Start today without IT: a free Gemini key you make yourself** (2 minutes), until IT gives you a Claude or OpenAI key:
      1. Open [aistudio.google.com/apikey](https://aistudio.google.com/apikey) and sign in with your **Lambda Google account** (@lambdal.com or @lambda.ai). Accept the terms if asked.
      2. Click **Create API key** (if asked for a project: *Create API key in new project*), then **Copy**. The key starts with `AIza`.
-     3. In Settings click **Use Gemini here**, paste the key in *Gemini API key*, **Load models**, **Save**, then **Test AI**.
+     3. In Settings click **Use Gemini here** (it selects **Gemini Flash-Lite (latest)**, fast and with the free tier's highest limits), paste the key in *Gemini API key*, **Save**, then **Test AI**.
    - ⚠️ On the free tier Google may use what you send to improve its products, and there's a daily limit: turn on **Privacy mode** (Settings → Privacy) while you use it. When your Claude or OpenAI key arrives, switch the provider, paste it, and delete the Gemini key at aistudio.google.com/apikey. If AI Studio says it isn't available for your account, it's turned off for Lambda accounts: use the IT request. Don't use a personal Google account for work tickets.
 3. **Install the helper** (ping, BMC). Settings → *Getting started* → **Copy** the setup command and run it: on a Mac in **Terminal**, on Windows in **PowerShell**. It asks before installing anything.
 4. **Paste the key**, click **Load models**, then **Save**. Open any Jira ticket.
@@ -146,7 +146,7 @@ Browsers can't ping or talk to BMCs, so a small Python helper does it through Ch
 | Local – LM Studio | LM Studio server running (default `http://localhost:1234/v1`) |
 | Local – Ollama | `ollama serve` (default `http://localhost:11434/v1`); on a 403 set `OLLAMA_ORIGINS=chrome-extension://*` |
 
-- *Auto* picks a fast, accurate model (newest Claude Sonnet, a GPT "mini", Gemini Flash). **Response speed** (Fast by default) controls how long it thinks; on Fast, Claude's thinking is turned off where the model allows it.
+- *Auto* picks a fast, accurate model (newest Claude Sonnet, a GPT "mini", Gemini Flash-Lite latest). Choosing Gemini selects **Gemini Flash-Lite (latest)** (`gemini-flash-lite-latest`) unless you pick another model. **Response speed** (Fast by default) controls how long it thinks; on Fast, Claude's thinking is turned off where the model allows it.
 - Briefs use structured output (JSON schema), stream in, and the Claude system prompt is cached between tickets. Local models: use a 7B+ instruct model.
 
 ## Data and security

@@ -26,7 +26,10 @@ function showProvider(p) {
   document.querySelectorAll(".provider-box").forEach((el) => {
     el.classList.toggle("hidden", el.dataset.provider !== p);
   });
+  // Gemini starts on Flash-Lite (latest) unless you picked another model; Save keeps it.
+  if (p === "gemini" && !models.gemini) models.gemini = GEMINI_DEFAULT_MODEL;
   resetModelSelect(models[p]);
+  if (p === "gemini") [...$("model").options].find((o) => o.value === GEMINI_DEFAULT_MODEL)?.replaceChildren("Gemini Flash-Lite (latest) · recommended");
 }
 
 // Read the form into a settings object (without saving).
@@ -140,8 +143,9 @@ $("loadModels").addEventListener("click", async () => {
     const list = await listModels(s);
     const keep = $("model").value;
     resetModelSelect("");
+    if (s.provider === "gemini") ensureModelOption(GEMINI_DEFAULT_MODEL, "Gemini Flash-Lite (latest) · recommended"); // an alias: not always listed
     list.forEach((m) => ensureModelOption(m.id, m.name === m.id ? m.id : `${m.name} (${m.id})`));
-    $("model").value = list.some((m) => m.id === keep) ? keep : "";
+    $("model").value = [...$("model").options].some((o) => o.value === keep) ? keep : "";
     showMsg(list.length ? `Connected — ${list.length} models available.` : "Connected, but no models were found.");
   } catch (e) {
     showMsg(String(e.message || e), true);
