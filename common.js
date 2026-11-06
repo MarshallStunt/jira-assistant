@@ -106,6 +106,8 @@ function missingConfig(s) {
 // Keyboard shortcuts as shown in hints (Mac vs Windows/Linux).
 const IS_MAC = /mac/i.test(navigator.userAgentData?.platform || navigator.platform || "");
 const IS_WIN = /win/i.test(navigator.userAgentData?.platform || navigator.platform || "");
+// Installed from the Chrome Web Store (Chrome adds update_url): the store updates it, and its files live in the profile.
+const IS_STORE = "update_url" in chrome.runtime.getManifest();
 const KEYS = IS_MAC
   ? { paste: "⌘V", quickAccess: "⌘⇧Space", slackSearch: "⌘K" }
   : { paste: "Ctrl+V", quickAccess: "Ctrl+Shift+Space", slackSearch: "Ctrl+K" };
@@ -132,6 +134,17 @@ function browserDataDir() {
 // mac / win: the command to run once the folder is found, as "$d" (Terminal on a Mac, PowerShell on Windows).
 function folderCommand(mac, win) {
   const id = chrome.runtime.id, dir = browserDataDir();
+  if (IS_STORE) {
+    // A store install is unpacked by Chrome into <profile>/Extensions/<id>/<version>_0.
+    const ver = chrome.runtime.getManifest().version;
+    if (IS_WIN) {
+      return `$id='${id}'; $d = Resolve-Path "${dir}\\*\\Extensions\\${id}\\${ver}_*" -ErrorAction SilentlyContinue | Select-Object -Last 1 | % { $_.Path }; ` +
+        `if ($d) { ${win} } else { 'Lambda Rackside folder not found: see Settings' }`;
+    }
+    const base = IS_MAC ? dir : "~/.config/google-chrome";
+    return `d=$(ls -d ${base}/*/Extensions/${id}/${ver}_* 2>/dev/null | tail -1); ` +
+      `if [ -n "$d" ]; then ${mac}; else echo "Lambda Rackside folder not found: see Settings"; fi`;
+  }
   if (IS_WIN) {
     return `$id='${id}'; $d = Get-ChildItem "${dir}\\*\\Secure Preferences","${dir}\\*\\Preferences" -ErrorAction SilentlyContinue | ` +
       `% { if ((Get-Content -Raw $_.FullName) -match ('"' + $id + '":\\{.*?"path":"([^"]*)"')) { [regex]::Unescape($Matches[1]) } } | Select-Object -First 1; ` +
@@ -161,6 +174,7 @@ function isNewerVersion(a, b) {
 // { ok, latest, current, available, error, at }
 async function checkForUpdate(force = false) {
   const current = chrome.runtime.getManifest().version;
+  if (IS_STORE) return { ok: true, store: true, latest: current, current, available: false, at: Date.now() };
   const { updateCheck } = await chrome.storage.local.get("updateCheck");
   let r = updateCheck;
   if (force || !r || Date.now() - r.at > UPDATE_EVERY_MS) {

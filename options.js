@@ -278,7 +278,8 @@ async function showUpdate(force) {
   const u = await checkForUpdate(force);
   if (run !== updateRun) return; // a newer check is running: show only its result
   showUpdateBadge(u);
-  $("updateStatus").textContent = !u.ok ? `You have ${u.current}. Couldn't check: ${u.error}.`
+  $("updateStatus").textContent = u.store ? `✓ Version ${u.current}, from the Chrome Web Store: new versions install automatically.`
+    : !u.ok ? `You have ${u.current}. Couldn't check: ${u.error}.`
     : u.available ? `🆕 Version ${u.latest} is available (you have ${u.current}).` : `✓ You have the latest version (${u.current}).`;
   $("updateStatus").style.color = u.ok ? "" : "var(--err)";
   $("updateHelp").replaceChildren(...(u.available ? [updateSteps()] : []));
