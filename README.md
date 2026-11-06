@@ -126,7 +126,7 @@ Five tabs, Save always at the bottom:
 Browsers can't ping or talk to BMCs, so a small Python helper does it through Chrome's native messaging. The setup command installs it; to install it on its own, use the command under Settings → Servers & BMC:
 - The commands in Settings find the `lambda-rackside` folder wherever it is (Desktop, Downloads…): they look up the folder Chrome loaded the extension from, by its ID. If that fails, run the script by hand: `bash <folder>/setup.sh <extension-id>` (Windows: `powershell -ExecutionPolicy Bypass -File "<folder>\setup.ps1" <extension-id>`); dragging the file into Terminal/PowerShell types its path.
 - Mac/Linux: `bash <folder>/ping-helper/install.sh <extension-id>` (remove: `ping-helper/uninstall.sh`). Needs python3 (`xcode-select --install`).
-- Windows (PowerShell): `powershell -ExecutionPolicy Bypass -File "<folder>\ping-helper\install.ps1" <extension-id>` (remove: `uninstall.ps1`). Needs Python 3 (`winget install Python.Python.3.13`).
+- Windows (PowerShell): `powershell -ExecutionPolicy Bypass -File "<folder>\ping-helper\install.ps1" <extension-id>` (remove: `uninstall.ps1`). Needs Python 3: it finds one even when it isn't on PATH (py launcher, registry, usual install folders), and offers to install it for you (winget, no admin) if there's none.
 - Installing again for another copy of the folder (another extension ID) keeps the earlier one working too.
 - Installed to `~/Library/Application Support/DCOpsPingHelper` or `%LOCALAPPDATA%\DCOpsPingHelper`, registered for Chrome, Edge, Brave and Chromium. **Test ping helper** in Settings shows its version and TLS library.
 - It prefers a Python with TLS 1.3; if a BMC refuses the connection it retries with `curl`.

@@ -12,30 +12,15 @@ if ($ExtensionId -notmatch '^[a-p]{32}$') {
 }
 $Src = Split-Path -Parent $MyInvocation.MyCommand.Path
 
-# Find Python 3.6+ (prefer one with TLS 1.3: some BMCs refuse older TLS). The Microsoft Store "python"
-# placeholder doesn't run anything, so every candidate is actually started.
-function Get-PythonExe([string]$exe, [string[]]$extra) {
-  try {
-    $exe = & $exe @extra -c "import sys, ssl; assert sys.version_info >= (3, 6); print(sys.executable); print(ssl.HAS_TLSv1_3)" 2>$null
-    if ($LASTEXITCODE -eq 0 -and $exe) { return @{ Path = $exe[0].Trim(); Tls13 = ($exe[1].Trim() -eq "True") } }
-  } catch {}
-  return $null
-}
-$found = @()
-foreach ($c in @("py -3", "python", "python3")) {
-  $parts = $c -split " "
-  if (Get-Command $parts[0] -ErrorAction SilentlyContinue) {
-    $p = Get-PythonExe $parts[0] @($parts | Select-Object -Skip 1)
-    if ($p) { $found += $p }
-  }
-}
-$Py = ($found | Where-Object { $_.Tls13 } | Select-Object -First 1)
-if (-not $Py) { $Py = $found | Select-Object -First 1 }
+# Find Python 3.6+, even when it isn't on PATH; offer to install it if there's none.
+. (Join-Path $Src "python.ps1")
+$Py = Find-Python
 if (-not $Py) {
-  Write-Host "X Python 3 not found." -ForegroundColor Red
-  Write-Host "  Install it with:  winget install -e --id Python.Python.3.13   (or from python.org), then run this again."
-  exit 1
+  $a = Read-Host "Python 3 isn't installed. Install it now (for this user, no admin needed)? [Y/n]"
+  if (($a -eq "" -or $a -match '^[Yy]') -and (Install-Python)) { $Py = Find-Python }
 }
+if (-not $Py) { Write-NoPython; exit 1 }
+Write-Host "OK Python: $($Py.Path)" -ForegroundColor Green
 
 $InstallDir = Join-Path $env:LOCALAPPDATA "DCOpsPingHelper"
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
